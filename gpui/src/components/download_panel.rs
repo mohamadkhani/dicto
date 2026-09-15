@@ -6,8 +6,7 @@ use gpui_component::{h_flex, progress::Progress, scroll::ScrollableElement, v_fl
 
 use crate::{
     catalog::{self, DictCatalogEntry, InstallStatus, format_bytes},
-    colors,
-    download,
+    colors, download,
     state::{CatalogState, DictDownloadStatus, DictState},
 };
 
@@ -46,11 +45,7 @@ fn loading_view(msg: &str) -> gpui::AnyElement {
         .into_any_element()
 }
 
-fn error_view(
-    msg: &str,
-    state: Entity<DictState>,
-    _cx: &mut gpui::App,
-) -> gpui::AnyElement {
+fn error_view(msg: &str, state: Entity<DictState>, _cx: &mut gpui::App) -> gpui::AnyElement {
     let retry_state = state.clone();
     v_flex()
         .w_full()
@@ -291,10 +286,7 @@ fn catalog_row(
                             div()
                                 .text_size(px(10.))
                                 .text_color(colors::text_secondary())
-                                .child(SharedString::from(format!(
-                                    "\u{1F4DC} {}",
-                                    entry.license
-                                ))),
+                                .child(SharedString::from(format!("\u{1F4DC} {}", entry.license))),
                         ),
                 ),
         )
@@ -462,9 +454,7 @@ fn start_download(entry_id: &str, state: &Entity<DictState>, cx: &mut gpui::App)
         let bg_progress = progress.clone();
         let result = cx
             .background_executor()
-            .spawn(async move {
-                download::download_entry(&bg_urls, &bg_sha, &bg_progress)
-            })
+            .spawn(async move { download::download_entry(&bg_urls, &bg_sha, &bg_progress) })
             .await;
 
         // Stop the progress timer by dropping its handle

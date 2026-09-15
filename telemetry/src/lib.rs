@@ -40,8 +40,8 @@ use std::sync::Arc;
 
 pub use aptabase::AptabaseClient;
 pub use event::{
-    ErrorKind, Event, LookupSource, PlaybackFailureReason, SettingsChange, SettingsSource,
-    SettingsTab,
+    ErrorKind, Event, LookupSource, PlaybackFailureReason, QuickTranslateSource, SettingsChange,
+    SettingsSource, SettingsTab,
 };
 pub use null::NullTelemetry;
 

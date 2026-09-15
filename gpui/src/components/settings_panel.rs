@@ -10,10 +10,7 @@ use tracing::{info, warn};
 use crate::{colors, state::DictState};
 
 /// Build the dictionary list UI using the Table component.
-pub fn dictionaries_tab_content(
-    state: Entity<DictState>,
-    cx: &mut gpui::App,
-) -> gpui::AnyElement {
+pub fn dictionaries_tab_content(state: Entity<DictState>, cx: &mut gpui::App) -> gpui::AnyElement {
     let snapshot = state.read(cx).dictionaries.clone();
 
     let header_text = div()
@@ -573,19 +570,25 @@ pub fn telemetry_tab_content(state: Entity<DictState>, _cx: &mut gpui::App) -> g
                      dictionary contents, or looked-up words are ever collected.",
                 )),
         )
-        .child(privacy_list("What we collect", &[
-            "Lookups performed (count only, never the word)",
-            "Pronunciation plays (count) and playback failures (reason)",
-            "Dictionaries imported (count, never the name)",
-            "Operating system, app version, system locale",
-            "Errors during indexing/import (message, paths stripped)",
-        ]))
-        .child(privacy_list("What we DON'T collect", &[
-            "Which words you look up",
-            "Dictionary names or contents",
-            "Your name, username, or any personal data",
-            "Anything at all when this is turned off",
-        ]))
+        .child(privacy_list(
+            "What we collect",
+            &[
+                "Lookups performed (count only, never the word)",
+                "Pronunciation plays (count) and playback failures (reason)",
+                "Dictionaries imported (count, never the name)",
+                "Operating system, app version, system locale",
+                "Errors during indexing/import (message, paths stripped)",
+            ],
+        ))
+        .child(privacy_list(
+            "What we DON'T collect",
+            &[
+                "Which words you look up",
+                "Dictionary names or contents",
+                "Your name, username, or any personal data",
+                "Anything at all when this is turned off",
+            ],
+        ))
         // Toggle row
         .child(
             h_flex()
@@ -611,10 +614,7 @@ pub fn telemetry_tab_content(state: Entity<DictState>, _cx: &mut gpui::App) -> g
                     }
                     // Re-init immediately so opt-in/out takes effect now.
                     dicto_telemetry::init(
-                        matches!(
-                            next,
-                            mdict_rs::settings::TelemetryConsent::OptedIn
-                        ),
+                        matches!(next, mdict_rs::settings::TelemetryConsent::OptedIn),
                         mdict_rs::settings::current()
                             .installation_id
                             .unwrap_or_default(),
@@ -723,7 +723,11 @@ fn toggle_switch(
         .items_center()
         .px(px(2.))
         .cursor_pointer()
-        .bg(if on { colors::primary() } else { colors::border() })
+        .bg(if on {
+            colors::primary()
+        } else {
+            colors::border()
+        })
         .child(
             div()
                 .w(px(16.))

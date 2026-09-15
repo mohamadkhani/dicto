@@ -58,6 +58,33 @@ pub enum Event {
         kind: ErrorKind,
         message: String,
     },
+    /// The user triggered quick translate via hotkey or tray menu.
+    /// `source` records how it was triggered; no text content is recorded.
+    QuickTranslateTriggered { source: QuickTranslateSource },
+    /// A quick translate request completed successfully or failed.
+    /// `provider` is the LLM provider name; no translated text is recorded.
+    QuickTranslateCompleted {
+        provider: &'static str,
+        success: bool,
+        duration_ms: u64,
+    },
+}
+
+/// How the quick-translate feature was triggered.
+pub enum QuickTranslateSource {
+    /// Global hotkey press.
+    Hotkey,
+    /// Tray menu item.
+    TrayMenu,
+}
+
+impl QuickTranslateSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Hotkey => "hotkey",
+            Self::TrayMenu => "tray_menu",
+        }
+    }
 }
 
 /// Why a pronunciation playback failed. Actionable and non-sensitive.
@@ -145,6 +172,7 @@ pub enum SettingsTab {
     Dictionaries,
     Import,
     Download,
+    QuickTranslate,
     Telemetry,
     About,
 }
@@ -155,6 +183,7 @@ impl SettingsTab {
             Self::Dictionaries => "dictionaries",
             Self::Import => "import",
             Self::Download => "download",
+            Self::QuickTranslate => "quick_translate",
             Self::Telemetry => "telemetry",
             Self::About => "about",
         }
