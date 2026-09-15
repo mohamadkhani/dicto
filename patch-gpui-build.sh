@@ -12,7 +12,11 @@
 
 set -e
 
-CACHE_BASE=$(find ~/.cargo/git/checkouts/zed-*/ae47ec9 -maxdepth 0 -type d 2>/dev/null | head -1)
+# Resolve the checkout dir for the pinned rev (see root Cargo.toml [patch]):
+# checkouts live under <hash>/<short-rev>, so match on the rev prefix instead
+# of a hardcoded directory name that breaks on every rev bump.
+PINNED_REV=c612da6503499b7242ce60e7aa893184d63043ec
+CACHE_BASE=$(find ~/.cargo/git/checkouts/zed-* -maxdepth 1 -type d -name "${PINNED_REV:0:7}*" 2>/dev/null | head -1)
 
 if [ -z "$CACHE_BASE" ]; then
     echo "Error: Could not find zed git cache."

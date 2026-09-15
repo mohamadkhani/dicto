@@ -14,11 +14,16 @@ mod playback;
 mod quick_translate;
 mod selection;
 mod state;
+#[cfg(target_os = "linux")]
 mod tray;
 mod tts;
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::{borrow::Cow, time::Duration};
+use std::borrow::Cow;
+use std::sync::atomic::AtomicBool;
+#[cfg(target_os = "linux")]
+use std::sync::atomic::Ordering;
+#[cfg(target_os = "linux")]
+use std::time::Duration;
 
 use gpui::{
     App, AppContext as _, AssetSource, Bounds, QuitMode, SharedString, WindowBounds,
@@ -30,6 +35,7 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 
 use crate::app::DictApp;
 use crate::state::DictState;
+#[cfg(target_os = "linux")]
 use crate::tray::{TrayAction, spawn_tray};
 
 /// Global flag set by the tray menu "Quick Translate" item.
@@ -49,6 +55,7 @@ fn tray_translate_token() -> &'static std::sync::Mutex<Option<String>> {
 }
 
 /// Stash the latest tray activation token for the next popup open.
+#[cfg(target_os = "linux")]
 pub fn set_tray_translate_token(token: Option<String>) {
     if let Ok(mut g) = tray_translate_token().lock() {
         *g = token;
@@ -65,6 +72,7 @@ pub fn take_tray_translate_token() -> Option<String> {
 
 /// Path to the IPC socket used by `dicto --translate` to signal a running
 /// instance. Lives in the user's runtime directory.
+#[cfg(target_os = "linux")]
 fn ipc_socket_path() -> std::path::PathBuf {
     let base = std::env::var("XDG_RUNTIME_DIR")
         .map(std::path::PathBuf::from)
@@ -74,6 +82,7 @@ fn ipc_socket_path() -> std::path::PathBuf {
 
 /// Send a translate trigger to the running instance via the IPC socket.
 /// Returns an error if no instance is listening.
+#[cfg(target_os = "linux")]
 fn send_translate_trigger() -> std::io::Result<()> {
     use std::io::Write;
     use std::os::unix::net::UnixStream;
@@ -86,6 +95,7 @@ fn send_translate_trigger() -> std::io::Result<()> {
 
 /// Spawn the IPC server that listens for `dicto --translate` triggers.
 /// Runs in a background thread; sets the global flag on each trigger.
+#[cfg(target_os = "linux")]
 fn spawn_ipc_server() {
     use std::os::unix::net::UnixListener;
 
@@ -171,16 +181,24 @@ fn main() {
     // global hotkeys — the user binds a custom keyboard shortcut to
     // `dicto --translate` in GNOME Settings → Keyboard → Custom Shortcuts.
     if std::env::args().any(|a| a == "--translate" || a == "-t") {
-        match send_translate_trigger() {
-            Ok(()) => std::process::exit(0),
-            Err(e) => {
-                eprintln!(
-                    "dicto: could not reach a running instance.\n\
-                     Start Dicto first, then press the shortcut.\n\
-                     Error: {e}"
-                );
-                std::process::exit(1);
+        #[cfg(target_os = "linux")]
+        {
+            match send_translate_trigger() {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!(
+                        "dicto: could not reach a running instance.\n\
+                         Start Dicto first, then press the shortcut.\n\
+                         Error: {e}"
+                    );
+                    std::process::exit(1);
+                }
             }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            eprintln!("dicto: --translate IPC is only supported on Linux");
+            std::process::exit(1);
         }
     }
 
@@ -247,11 +265,15 @@ fn main() {
 
             // Start the IPC server so `dicto --translate` (e.g. from a GNOME
             // custom keyboard shortcut) can trigger quick translate.
+            #[cfg(target_os = "linux")]
             spawn_ipc_server();
 
             // Spawn the ksni tray; poll its action channel from the main loop.
-            let (tray_rx, tray_token) = spawn_tray();
-            poll_tray_actions(cx, tray_rx, tray_token);
+            #[cfg(target_os = "linux")]
+            {
+                let (tray_rx, tray_token) = spawn_tray();
+                poll_tray_actions(cx, tray_rx, tray_token);
+            }
 
             open_dictionary_window(cx);
 
@@ -266,6 +288,7 @@ fn main() {
 ///   uses; the `app.rs` poll loop picks it up and runs `trigger_translate`.
 ///   Also stashes the tray's xdg-activation token so the popup can raise+focus.
 /// - `Quit` → quit the app.
+#[cfg(target_os = "linux")]
 fn poll_tray_actions(
     cx: &mut App,
     tray_rx: std::sync::mpsc::Receiver<TrayAction>,

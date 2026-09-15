@@ -23,11 +23,6 @@ gpui_platform = { git = "https://github.com/mohamadkhani/zed", rev = "c612da6503
 gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "accb9616263b" }
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "accb9616263b" }
 anyhow = "1.0"
-# ashpd shares zbus with gpui_linux (which forces async-io), so we must use the
-# async-io feature too — enabling tokio would conflict. The `global_shortcuts`
-# feature gates the GlobalShortcuts portal module.
-ashpd = { version = "0.13", default-features = false, features = ["async-io", "global_shortcuts"] }
-ksni = { git = "https://github.com/mohamadkhani/ksni.git", tag = "v0.3.5-gnome-activation-token", features = ["tokio"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rodio = { version = "0.20", default-features = false, features = ["mp3", "wav", "vorbis", "flac"] }
@@ -38,15 +33,21 @@ sha2 = "0.10"
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 thiserror = "1"
 tokio = { version = "1", features = ["sync", "rt", "macros"] }
-global-hotkey = "0.5"
-zbus = "5"
-futures-util = "0.3"
 unicode-bidi = "0.3"
 
 [build-dependencies]
 embed-resource = "3.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# ashpd shares zbus with gpui_linux (which forces async-io), so we must use the
+# async-io feature too — enabling tokio would conflict. The `global_shortcuts`
+# feature gates the GlobalShortcuts portal module. Linux-only: the crate
+# unconditionally uses `os::unix::ffi` and fails to compile on Windows.
+ashpd = { version = "0.13", default-features = false, features = ["async-io", "global_shortcuts"] }
+ksni = { git = "https://github.com/mohamadkhani/ksni.git", tag = "v0.3.5-gnome-activation-token", features = ["tokio"] }
+zbus = "5"
+futures-util = "0.3"
+global-hotkey = "0.5"
 gpui_platform = { git = "https://github.com/mohamadkhani/zed", rev = "c612da6503499b7242ce60e7aa893184d63043ec", features = ["font-kit", "wayland", "x11"] }
 gtk = "0.18"
 x11rb = { version = "0.13", default-features = false }

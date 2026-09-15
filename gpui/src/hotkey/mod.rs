@@ -9,7 +9,9 @@
 //! event loop can check them on each tick without blocking.
 
 use thiserror::Error;
-use tracing::{info, warn};
+#[cfg(target_os = "linux")]
+use tracing::info;
+use tracing::warn;
 
 /// Errors from hotkey registration.
 #[derive(Debug, Error)]
@@ -61,29 +63,32 @@ pub trait HotkeyManager: Send + Sync {
 /// X11 backend on GNOME/KDE Wayland — and X11 global hotkeys only fire
 /// inside XWayland apps, never native Wayland ones.
 pub fn create_hotkey_manager() -> Box<dyn HotkeyManager> {
-    let session_type = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
-    info!(session_type = %session_type, "hotkey: detecting backend");
+    #[cfg(target_os = "linux")]
+    {
+        let session_type = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
+        info!(session_type = %session_type, "hotkey: detecting backend");
 
-    if session_type == "wayland" || std::env::var("WAYLAND_DISPLAY").is_ok() {
-        match PortalHotkeyManager::new() {
-            Ok(manager) => {
-                info!("hotkey: using XDG Portal backend (Wayland)");
-                return Box::new(manager);
-            }
-            Err(e) => {
-                warn!(error = %e, "hotkey: XDG Portal backend failed, falling back to tray menu");
+        if session_type == "wayland" || std::env::var("WAYLAND_DISPLAY").is_ok() {
+            match PortalHotkeyManager::new() {
+                Ok(manager) => {
+                    info!("hotkey: using XDG Portal backend (Wayland)");
+                    return Box::new(manager);
+                }
+                Err(e) => {
+                    warn!(error = %e, "hotkey: XDG Portal backend failed, falling back to tray menu");
+                }
             }
         }
-    }
 
-    if session_type == "x11" || std::env::var("DISPLAY").is_ok() {
-        match X11HotkeyManager::new() {
-            Ok(manager) => {
-                info!("hotkey: using X11 backend");
-                return Box::new(manager);
-            }
-            Err(e) => {
-                warn!(error = %e, "hotkey: X11 backend failed");
+        if session_type == "x11" || std::env::var("DISPLAY").is_ok() {
+            match X11HotkeyManager::new() {
+                Ok(manager) => {
+                    info!("hotkey: using X11 backend");
+                    return Box::new(manager);
+                }
+                Err(e) => {
+                    warn!(error = %e, "hotkey: X11 backend failed");
+                }
             }
         }
     }
@@ -97,8 +102,12 @@ pub fn create_hotkey_manager() -> Box<dyn HotkeyManager> {
 pub mod fallback;
 pub use fallback::FallbackHotkeyManager;
 
+#[cfg(target_os = "linux")]
 pub mod portal;
+#[cfg(target_os = "linux")]
 pub use portal::PortalHotkeyManager;
 
+#[cfg(target_os = "linux")]
 pub mod x11;
+#[cfg(target_os = "linux")]
 pub use x11::X11HotkeyManager;

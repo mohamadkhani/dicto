@@ -11,7 +11,9 @@
 
 use std::time::Instant;
 
-use arboard::{Clipboard, LinuxClipboardKind};
+use arboard::Clipboard;
+#[cfg(target_os = "linux")]
+use arboard::LinuxClipboardKind;
 use tracing::debug;
 
 /// Which source the selected text was read from.
