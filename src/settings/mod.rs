@@ -27,6 +27,11 @@ pub struct Settings {
     /// Local-only; identifies an installation, never a person.
     #[serde(default)]
     pub installation_id: Option<String>,
+    /// Quick Translate feature: global hotkey + LLM translation settings.
+    /// Stored in the core crate as plain data so the GPUI app and
+    /// `dicto-translate` crate both have access without circular deps.
+    #[serde(default)]
+    pub quick_translate: QuickTranslateSettings,
 }
 
 /// Three-state telemetry consent, persisted in settings.toml.
@@ -40,6 +45,129 @@ pub enum TelemetryConsent {
     OptedIn,
     /// User declined → nothing is sent, ever, until they re-enable.
     OptedOut,
+}
+
+/// Quick Translate feature settings.
+///
+/// Controls the global hotkey, LLM provider configuration, and target
+/// language for the selection-translation popup. Stored here in the core
+/// crate as plain data so both the GPUI UI and the `dicto-translate`
+/// crate can use them without circular dependencies.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuickTranslateSettings {
+    /// Whether the quick-translate feature is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Hotkey string in "Mod+Mod+Key" format, e.g. "Ctrl+Alt+D".
+    #[serde(default = "default_hotkey")]
+    pub hotkey: String,
+    /// Which LLM provider to use for translation of longer text.
+    #[serde(default)]
+    pub llm_provider: LlmProvider,
+    /// API key for the configured LLM provider.
+    /// Stored in plaintext; future work may move to OS keyring.
+    #[serde(default)]
+    pub api_key: String,
+    /// Base URL for the API. Required for OpenAI-compatible providers,
+    /// optional for Anthropic (defaults to api.anthropic.com).
+    #[serde(default)]
+    pub api_base_url: String,
+    /// Model name, e.g. "claude-sonnet-4-6" or "gpt-4o-mini".
+    #[serde(default = "default_model")]
+    pub model: String,
+    /// Target language for translation, e.g. "English", "Persian".
+    #[serde(default = "default_target_lang")]
+    pub target_lang: String,
+    /// Text-to-speech settings for the popup's Speak button.
+    #[serde(default)]
+    pub tts: TtsSettings,
+}
+
+impl Default for QuickTranslateSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            hotkey: default_hotkey(),
+            llm_provider: LlmProvider::default(),
+            api_key: String::new(),
+            api_base_url: String::new(),
+            model: default_model(),
+            target_lang: default_target_lang(),
+            tts: TtsSettings::default(),
+        }
+    }
+}
+
+/// Text-to-speech settings.
+///
+/// When `enabled`, the popup's Speak button synthesizes speech via an
+/// OpenAI-compatible `/audio/speech` endpoint (OpenAI, Groq, OpenRouter,
+/// local servers). When disabled, it falls back to the platform TTS
+/// (espeak-ng on Linux).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TtsSettings {
+    /// Use the AI TTS API instead of the platform TTS.
+    #[serde(default)]
+    pub enabled: bool,
+    /// API key for the TTS provider.
+    #[serde(default)]
+    pub api_key: String,
+    /// Base URL, e.g. "https://api.openai.com/v1".
+    #[serde(default = "default_tts_base_url")]
+    pub api_base_url: String,
+    /// TTS model, e.g. "gpt-4o-mini-tts" or "tts-1".
+    #[serde(default = "default_tts_model")]
+    pub model: String,
+    /// Voice name, e.g. "alloy", "nova", "shimmer".
+    #[serde(default = "default_tts_voice")]
+    pub voice: String,
+}
+
+impl Default for TtsSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_key: String::new(),
+            api_base_url: default_tts_base_url(),
+            model: default_tts_model(),
+            voice: default_tts_voice(),
+        }
+    }
+}
+
+fn default_tts_base_url() -> String {
+    "https://api.openai.com/v1".to_string()
+}
+
+fn default_tts_model() -> String {
+    "gpt-4o-mini-tts".to_string()
+}
+
+fn default_tts_voice() -> String {
+    "alloy".to_string()
+}
+
+fn default_hotkey() -> String {
+    "Ctrl+Alt+D".to_string()
+}
+
+fn default_model() -> String {
+    "claude-sonnet-4-6".to_string()
+}
+
+fn default_target_lang() -> String {
+    "English".to_string()
+}
+
+/// LLM provider for AI-powered translation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LlmProvider {
+    /// Anthropic Claude API.
+    #[default]
+    Anthropic,
+    /// Any OpenAI-compatible endpoint (Ollama, Groq, OpenRouter, etc.).
+    OpenAiCompatible,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -171,7 +299,8 @@ fn format_uuid_v4() -> String {
     )
 }
 
-fn save(s: &Settings) -> anyhow::Result<()> {
+/// Persist settings to disk.
+pub fn save(s: &Settings) -> anyhow::Result<()> {
     let path = settings_path();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Tray variant of the Dicto mark: only the inner dictionary card
+     (front card + bold "A" + definition lines), cropped from
+     assets/icon.svg. The outer rounded background and stacked back
+     pages are dropped — at tray size only the card reads.
+     Regenerate the embedded pixmap with assets/gen-tray-icon.sh -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="26 24 72 84" role="img" aria-label="Dicto">
+  <defs>
+    <linearGradient id="card" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#fafbff"/>
+      <stop offset="100%" stop-color="#dde3ff"/>
+    </linearGradient>
+  </defs>
+
+  <!-- front card -->
+  <rect x="26" y="24" width="72" height="84" rx="6" fill="url(#card)"/>
+
+  <!-- bold "A" (dictionary mark) -->
+  <path d="M 38 84 L 52 38 L 62 38 L 76 84 L 67 84 L 64 72 L 50 72 L 47 84 Z
+           M 52 64 L 62 64 L 57 48 Z"
+        fill="#1a1b26" fill-rule="evenodd"/>
+
+  <!-- phonetic / definition lines (solid: legible at tray size) -->
+  <line x1="38" y1="94" x2="86" y2="94" stroke="#7aa2f7" stroke-width="3" stroke-linecap="round"/>
+  <line x1="38" y1="102" x2="70" y2="102" stroke="#7aa2f7" stroke-width="3" stroke-linecap="round"/>
+</svg>

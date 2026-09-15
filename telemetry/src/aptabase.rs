@@ -178,6 +178,22 @@ fn into_wire(event: Event) -> (String, Option<Vec<(String, String)>>) {
                 ]),
             )
         }
+        Event::QuickTranslateTriggered { source } => (
+            "quick_translate_triggered".to_string(),
+            Some(vec![("source".to_string(), source.as_str().to_string())]),
+        ),
+        Event::QuickTranslateCompleted {
+            provider,
+            success,
+            duration_ms,
+        } => (
+            "quick_translate_completed".to_string(),
+            Some(vec![
+                ("provider".to_string(), provider.to_string()),
+                ("success".to_string(), success.to_string()),
+                ("duration_ms".to_string(), duration_ms.to_string()),
+            ]),
+        ),
     }
 }
 

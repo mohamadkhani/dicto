@@ -26,10 +26,7 @@ use crate::colors;
 pub fn open_consent_dialog(window: &mut Window, cx: &mut gpui::App) {
     // Guard: only show when genuinely undecided.
     let consent = mdict_rs::settings::current().telemetry_consent;
-    if !matches!(
-        consent,
-        mdict_rs::settings::TelemetryConsent::Undecided
-    ) {
+    if !matches!(consent, mdict_rs::settings::TelemetryConsent::Undecided) {
         return;
     }
 
@@ -45,44 +42,49 @@ pub fn open_consent_dialog(window: &mut Window, cx: &mut gpui::App) {
                 set_consent(mdict_rs::settings::TelemetryConsent::OptedOut, cx);
             })
             .content(move |content, _window, _cx| {
-                content
-                    .child(
-                        v_flex()
-                            .w_full()
-                            .gap(px(14.))
-                            // Heading
-                            .child(
-                                div()
-                                    .text_size(px(16.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(colors::text())
-                                    .child(SharedString::from("Help improve Dicto")),
-                            )
-                            // Body
-                            .child(
-                                div()
-                                    .text_size(px(13.))
-                                    .text_color(colors::text_secondary())
-                                    .child(SharedString::from(
-                                        "Allow Dicto to collect anonymous usage statistics? \
+                content.child(
+                    v_flex()
+                        .w_full()
+                        .gap(px(14.))
+                        // Heading
+                        .child(
+                            div()
+                                .text_size(px(16.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(colors::text())
+                                .child(SharedString::from("Help improve Dicto")),
+                        )
+                        // Body
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .text_color(colors::text_secondary())
+                                .child(SharedString::from(
+                                    "Allow Dicto to collect anonymous usage statistics? \
                                          This helps fix bugs and prioritize features. You can \
                                          change this anytime in Settings \u{2192} Telemetry.",
-                                    )),
-                            )
-                            // Collected / not collected
-                            .child(summary_list("What we collect", &[
+                                )),
+                        )
+                        // Collected / not collected
+                        .child(summary_list(
+                            "What we collect",
+                            &[
                                 "Lookups performed (count only)",
                                 "Pronunciation plays and playback failures",
                                 "Dictionaries imported (count, never names)",
                                 "Operating system, app version, system locale",
                                 "Indexing/import errors (paths stripped)",
-                            ]))
-                            .child(summary_list("What we never collect", &[
+                            ],
+                        ))
+                        .child(summary_list(
+                            "What we never collect",
+                            &[
                                 "Which words you look up",
                                 "Dictionary contents or names",
                                 "Your name, username, or personal data",
-                            ])),
-                    )
+                            ],
+                        )),
+                )
             })
             .footer(
                 h_flex()
@@ -103,10 +105,7 @@ pub fn open_consent_dialog(window: &mut Window, cx: &mut gpui::App) {
                             .hover(|s| s.bg(colors::bg()))
                             .child("Don't Allow")
                             .on_click(|_, window, cx| {
-                                set_consent(
-                                    mdict_rs::settings::TelemetryConsent::OptedOut,
-                                    cx,
-                                );
+                                set_consent(mdict_rs::settings::TelemetryConsent::OptedOut, cx);
                                 window.close_dialog(cx);
                             }),
                     )
@@ -124,10 +123,7 @@ pub fn open_consent_dialog(window: &mut Window, cx: &mut gpui::App) {
                             .hover(|s| s.opacity(0.85))
                             .child("Allow")
                             .on_click(|_, window, cx| {
-                                set_consent(
-                                    mdict_rs::settings::TelemetryConsent::OptedIn,
-                                    cx,
-                                );
+                                set_consent(mdict_rs::settings::TelemetryConsent::OptedIn, cx);
                                 window.close_dialog(cx);
                             }),
                     ),

@@ -1,9 +1,16 @@
 pub mod about_panel;
+pub mod banner;
 pub mod consent_dialog;
 pub mod detail_panel;
 pub mod download_panel;
 pub mod import_panel;
+pub mod option_picker;
+pub mod qt_catalog;
+pub mod quick_translate_panel;
 pub mod search_bar;
 pub mod settings_panel;
 pub mod settings_window;
+pub mod spinner;
+pub mod text_editor;
+pub mod translate_popup;
 pub mod word_list;
