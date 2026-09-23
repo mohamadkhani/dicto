@@ -3,7 +3,7 @@
 # Hand-edits are fine but will be overwritten on the next tagged release.
 
 pkgname=dicto-bin
-pkgver=0.6.1
+pkgver=0.6.2
 pkgrel=1
 pkgdesc="Minimal native dictionary app for MDX/MDD files"
 arch=('x86_64')
