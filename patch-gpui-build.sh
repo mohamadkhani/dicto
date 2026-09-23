@@ -91,7 +91,7 @@ fn main() {
             ];
             let mut content = String::new();
             for module in &modules {
-                for suffix in &["VERTEX", "FRAGMENT"] {
+                for suffix in &["VERTEX_BYTES", "FRAGMENT_BYTES"] {
                     content.push_str(&format!(
                         "const {}_{}: &[u8] = &[];\n",
                         module.to_uppercase(), suffix

@@ -108,6 +108,7 @@ pub fn quick_translate_tab_content(
                     "Hotkey backend: {}",
                     match backend.as_str() {
                         "x11" => "X11 (fully supported)",
+                        "windows" => "Windows (fully supported)",
                         "tray_menu" => "Tray menu only — use the tray icon to translate",
                         other => other,
                     }

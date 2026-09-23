@@ -1,7 +1,8 @@
 //! Global hotkey registration with platform backends.
 //!
 //! Provides a unified [`HotkeyManager`] trait with multiple backends:
-//! - X11: `global-hotkey` crate (tauri-apps) — full support
+//! - X11 / Windows: `global-hotkey` crate (tauri-apps) — full support
+//!   (see [`global_hotkey`])
 //! - Wayland: XDG GlobalShortcuts portal (`ashpd`) — GNOME/KDE support
 //! - Fallback: tray-menu-only mode when no global hotkey backend is available
 //!
@@ -9,7 +10,7 @@
 //! event loop can check them on each tick without blocking.
 
 use thiserror::Error;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use tracing::info;
 use tracing::warn;
 
@@ -54,8 +55,8 @@ pub trait HotkeyManager: Send + Sync {
 
 /// Detect the best available hotkey backend at runtime and create a manager.
 ///
-/// On Wayland: tries the XDG GlobalShortcuts portal, falls back to tray menu.
-/// On X11: uses the `global-hotkey` crate.
+/// On Linux Wayland: tries the XDG GlobalShortcuts portal, falls back to
+/// tray menu. On Linux X11 and on Windows: uses the `global-hotkey` crate.
 ///
 /// Note: `XDG_SESSION_TYPE` takes priority over the presence of `DISPLAY`,
 /// because Wayland compositors run XWayland (so `DISPLAY` is usually set
@@ -81,7 +82,7 @@ pub fn create_hotkey_manager() -> Box<dyn HotkeyManager> {
         }
 
         if session_type == "x11" || std::env::var("DISPLAY").is_ok() {
-            match X11HotkeyManager::new() {
+            match GlobalHotkeyBackend::new("x11") {
                 Ok(manager) => {
                     info!("hotkey: using X11 backend");
                     return Box::new(manager);
@@ -89,6 +90,19 @@ pub fn create_hotkey_manager() -> Box<dyn HotkeyManager> {
                 Err(e) => {
                     warn!(error = %e, "hotkey: X11 backend failed");
                 }
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        match GlobalHotkeyBackend::new("windows") {
+            Ok(manager) => {
+                info!("hotkey: using Windows backend");
+                return Box::new(manager);
+            }
+            Err(e) => {
+                warn!(error = %e, "hotkey: Windows backend failed");
             }
         }
     }
@@ -102,12 +116,15 @@ pub fn create_hotkey_manager() -> Box<dyn HotkeyManager> {
 pub mod fallback;
 pub use fallback::FallbackHotkeyManager;
 
+/// Hotkey-string parsing shared by `global-hotkey`-based backends.
+pub mod keys;
+
 #[cfg(target_os = "linux")]
 pub mod portal;
 #[cfg(target_os = "linux")]
 pub use portal::PortalHotkeyManager;
 
-#[cfg(target_os = "linux")]
-pub mod x11;
-#[cfg(target_os = "linux")]
-pub use x11::X11HotkeyManager;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub mod global_hotkey;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub use global_hotkey::GlobalHotkeyBackend;

@@ -34,6 +34,8 @@ arboard = { version = "3", default-features = false, features = ["wayland-data-c
 thiserror = "1"
 tokio = { version = "1", features = ["sync", "rt", "macros"] }
 unicode-bidi = "0.3"
+# Shared by the X11 and Windows hotkey backends (see hotkey/global_hotkey.rs).
+global-hotkey = "0.5"
 
 [build-dependencies]
 embed-resource = "3.0"
@@ -47,7 +49,18 @@ ashpd = { version = "0.13", default-features = false, features = ["async-io", "g
 ksni = { git = "https://github.com/mohamadkhani/ksni.git", tag = "v0.3.5-gnome-activation-token", features = ["tokio"] }
 zbus = "5"
 futures-util = "0.3"
-global-hotkey = "0.5"
 gpui_platform = { git = "https://github.com/mohamadkhani/zed", rev = "c612da6503499b7242ce60e7aa893184d63043ec", features = ["font-kit", "wayland", "x11"] }
 gtk = "0.18"
 x11rb = { version = "0.13", default-features = false }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Tray icon + menu. Default features pull gtk/libappindicator/libxdo (Linux
+# only) — disable them. `menu` re-exports `muda` for menu item types.
+tray-icon = { version = "0.24", default-features = false }
+# Win32 message-loop plumbing (win32.rs). Pinned to 0.58 to unify with the
+# copy gpui-component already pulls in — a different major would build a
+# second windows crate.
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }

@@ -14,15 +14,14 @@ mod playback;
 mod quick_translate;
 mod selection;
 mod state;
-#[cfg(target_os = "linux")]
 mod tray;
 mod tts;
+#[cfg(target_os = "windows")]
+mod win32;
 
 use std::borrow::Cow;
 use std::sync::atomic::AtomicBool;
-#[cfg(target_os = "linux")]
 use std::sync::atomic::Ordering;
-#[cfg(target_os = "linux")]
 use std::time::Duration;
 
 use gpui::{
@@ -35,7 +34,6 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 
 use crate::app::DictApp;
 use crate::state::DictState;
-#[cfg(target_os = "linux")]
 use crate::tray::{TrayAction, spawn_tray};
 
 /// Global flag set by the tray menu "Quick Translate" item.
@@ -55,7 +53,6 @@ fn tray_translate_token() -> &'static std::sync::Mutex<Option<String>> {
 }
 
 /// Stash the latest tray activation token for the next popup open.
-#[cfg(target_os = "linux")]
 pub fn set_tray_translate_token(token: Option<String>) {
     if let Ok(mut g) = tray_translate_token().lock() {
         *g = token;
@@ -257,7 +254,7 @@ fn main() {
     app.with_assets(AppAssets)
         // The tray must survive closing the dictionary window. Default
         // QuitMode quits the app when the last window closes, which would tear
-        // down the ksni tray. Quit only on the explicit "Quit" tray action.
+        // down the tray. Quit only on the explicit "Quit" tray action.
         .with_quit_mode(QuitMode::Explicit)
         .run(move |cx: &mut App| {
             gpui_component::init(cx);
@@ -268,8 +265,8 @@ fn main() {
             #[cfg(target_os = "linux")]
             spawn_ipc_server();
 
-            // Spawn the ksni tray; poll its action channel from the main loop.
-            #[cfg(target_os = "linux")]
+            // Spawn the system tray; poll its action channel from the main
+            // loop.
             {
                 let (tray_rx, tray_token) = spawn_tray();
                 poll_tray_actions(cx, tray_rx, tray_token);
@@ -281,14 +278,14 @@ fn main() {
         });
 }
 
-/// Poll the ksni tray action channel from a GPUI background task.
+/// Poll the tray action channel from a GPUI background task.
 ///
 /// - `Show` → open (or re-activate) the dictionary window.
 /// - `QuickTranslate` → set the same flag the `dicto --translate` IPC path
 ///   uses; the `app.rs` poll loop picks it up and runs `trigger_translate`.
-///   Also stashes the tray's xdg-activation token so the popup can raise+focus.
+///   On Linux this also stashes the tray's xdg-activation token so the popup
+///   can raise+focus (the token slot stays `None` on Windows).
 /// - `Quit` → quit the app.
-#[cfg(target_os = "linux")]
 fn poll_tray_actions(
     cx: &mut App,
     tray_rx: std::sync::mpsc::Receiver<TrayAction>,
