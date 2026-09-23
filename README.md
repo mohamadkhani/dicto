@@ -28,7 +28,8 @@ Extract the archive and run the binary.
 
 ### Arch Linux (AUR)
 
-Install from AUR using your preferred helper (e.g. `yay`, `paru`, `pikaur`):
+Install from AUR using your preferred helper (e.g. `yay`, `paru`, `pikaur`).
+Both packages are updated automatically by CI on every tagged release:
 
 ```bash
 # Build from source

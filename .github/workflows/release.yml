@@ -36,6 +36,25 @@ jobs:
           tar czf ../dicto-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz \
             dicto dicto.desktop icon.svg LICENSE
 
+      # namcap lints the PKGBUILD recipes (missing depends, bad perms, wrong
+      # install paths). PLACEHOLDER sums are swapped for SKIP so namcap's
+      # checksum checks pass; CI injects the real sums only when publishing.
+      - name: Lint PKGBUILDs with namcap
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$GITHUB_REF_NAME" != v* ]]; then
+            VERSION="$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')"
+          fi
+          pacman -S --noconfirm namcap
+          for pkg in packaging/arch/dicto packaging/arch/dicto-bin; do
+            cp "$pkg/PKGBUILD" /tmp/PKGBUILD
+            sed -i "s/^pkgver=.*/pkgver=${VERSION}/" /tmp/PKGBUILD
+            sed -i "s/'PLACEHOLDER'/'SKIP'/" /tmp/PKGBUILD
+            echo "::group::namcap $pkg"
+            namcap /tmp/PKGBUILD
+            echo "::endgroup::"
+          done
+
       - uses: actions/upload-artifact@v4
         with:
           name: dicto-x86_64
@@ -99,3 +118,46 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
+
+  publish-aur:
+    needs: [release]
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm base-devel git openssh curl
+
+      - uses: actions/checkout@v4
+
+      # The AUR push uses an ed25519 key registered on the AUR account,
+      # stored as the AUR_SSH_PRIVATE_KEY repo secret. AUR has no per-package
+      # deploy keys, so that key is account-wide — treat it as a credential.
+      - name: Publish dicto (source package) to AUR
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          export VERSION
+          export AUR_REPO=dicto
+          export PKGBUILD_PATH=packaging/arch/dicto/PKGBUILD
+          curl -fsSL "https://github.com/logi-camp/dicto/archive/refs/tags/v${VERSION}.tar.gz" -o /tmp/tag-tarball.tar.gz
+          export B2SUM="$(b2sum /tmp/tag-tarball.tar.gz | awk '{print $1}')"
+          packaging/arch/publish-aur.sh
+
+      - name: Publish dicto-bin (prebuilt package) to AUR
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          export VERSION
+          export AUR_REPO=dicto-bin
+          export PKGBUILD_PATH=packaging/arch/dicto-bin/PKGBUILD
+          TARBALL_URL="https://github.com/logi-camp/dicto/releases/download/v${VERSION}/dicto-v${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL "$TARBALL_URL" -o /tmp/release-tarball.tar.gz
+          export B2SUM="$(b2sum /tmp/release-tarball.tar.gz | awk '{print $1}')"
+          packaging/arch/publish-aur.sh
