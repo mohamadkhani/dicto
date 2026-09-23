@@ -399,8 +399,10 @@ fn decode_key_entries(
 fn decode_text(bytes: &[u8], encoding: &str) -> String {
     if is_utf16(encoding) {
         let words: Vec<u16> = bytes
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
             .collect();
         String::from_utf16_lossy(&words).to_string()
     } else if encoding.is_empty() || encoding.eq_ignore_ascii_case("utf-8") {
