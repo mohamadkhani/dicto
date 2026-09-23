@@ -22,7 +22,10 @@ pub struct Header {
 /// Returns remaining bytes after the header.
 pub fn parse_header(data: &[u8]) -> anyhow::Result<(&[u8], Header)> {
     if data.len() < 8 {
-        anyhow::bail!("file too small to contain a valid header ({} bytes)", data.len());
+        anyhow::bail!(
+            "file too small to contain a valid header ({} bytes)",
+            data.len()
+        );
     }
     let len = u32::from_be_bytes(data[0..4].try_into().unwrap()) as usize;
     if data.len() < 8 + len {
@@ -76,8 +79,7 @@ pub fn parse_header(data: &[u8]) -> anyhow::Result<(&[u8], Header)> {
 pub fn parse_attrs(xml: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     let mut s = xml;
-    loop {
-        let Some(eq) = s.find("=\"") else { break };
+    while let Some(eq) = s.find("=\"") {
         let key = s[..eq]
             .split_ascii_whitespace()
             .next_back()
@@ -130,10 +132,10 @@ pub fn header_stylesheet_to_css(raw: &str) -> String {
         if let Some(color) = extract_attr(template, "color") {
             decls.push(format!("color:{color}"));
         }
-        if let Some(size) = extract_attr(template, "size") {
-            if let Some(px) = interpret_font_size(&size) {
-                decls.push(format!("font-size:{px}px"));
-            }
+        if let Some(size) = extract_attr(template, "size")
+            && let Some(px) = interpret_font_size(&size)
+        {
+            decls.push(format!("font-size:{px}px"));
         }
 
         if !decls.is_empty() {
@@ -169,7 +171,7 @@ fn interpret_font_size(raw: &str) -> Option<f32> {
         let idx = (3 - n).clamp(0, 6) as usize;
         Some(steps[idx])
     } else if let Ok(n) = raw.parse::<usize>() {
-        if n >= 1 && n <= 7 {
+        if (1..=7).contains(&n) {
             Some(steps[n - 1])
         } else {
             None

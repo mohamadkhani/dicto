@@ -127,8 +127,8 @@ fn tokenize(html: &str) -> Vec<Event> {
             if !buf.is_empty() {
                 out.push(Event::Text(std::mem::take(&mut buf)));
             }
-            if rest.starts_with("<!--") {
-                if let Some(end) = rest[4..].find("-->") {
+            if let Some(body) = rest.strip_prefix("<!--") {
+                if let Some(end) = body.find("-->") {
                     i += 4 + end + 3;
                     continue;
                 } else {
@@ -278,37 +278,37 @@ fn decode_entities(input: &str) -> String {
             Some(c) => c,
             None => break,
         };
-        if c == '&' {
-            if let Some(end_rel) = rest.find(';') {
-                let entity = &rest[1..end_rel];
-                let replacement = match entity {
-                    "amp" => Some("&".to_string()),
-                    "lt" => Some("<".to_string()),
-                    "gt" => Some(">".to_string()),
-                    "quot" => Some("\"".to_string()),
-                    "apos" => Some("'".to_string()),
-                    "nbsp" => Some(" ".to_string()),
-                    _ => {
-                        if let Some(num) = entity.strip_prefix('#') {
-                            let (radix, digits) = if let Some(hex) = num.strip_prefix(['x', 'X']) {
-                                (16, hex)
-                            } else {
-                                (10, num)
-                            };
-                            u32::from_str_radix(digits, radix)
-                                .ok()
-                                .and_then(char::from_u32)
-                                .map(|c| c.to_string())
+        if c == '&'
+            && let Some(end_rel) = rest.find(';')
+        {
+            let entity = &rest[1..end_rel];
+            let replacement = match entity {
+                "amp" => Some("&".to_string()),
+                "lt" => Some("<".to_string()),
+                "gt" => Some(">".to_string()),
+                "quot" => Some("\"".to_string()),
+                "apos" => Some("'".to_string()),
+                "nbsp" => Some(" ".to_string()),
+                _ => {
+                    if let Some(num) = entity.strip_prefix('#') {
+                        let (radix, digits) = if let Some(hex) = num.strip_prefix(['x', 'X']) {
+                            (16, hex)
                         } else {
-                            None
-                        }
+                            (10, num)
+                        };
+                        u32::from_str_radix(digits, radix)
+                            .ok()
+                            .and_then(char::from_u32)
+                            .map(|c| c.to_string())
+                    } else {
+                        None
                     }
-                };
-                if let Some(r) = replacement {
-                    out.push_str(&r);
-                    i += end_rel + 1;
-                    continue;
                 }
+            };
+            if let Some(r) = replacement {
+                out.push_str(&r);
+                i += end_rel + 1;
+                continue;
             }
         }
         out.push(c);
@@ -488,10 +488,10 @@ fn apply_decls(decls: &HashMap<String, String>, style: &mut Style) {
                 let lv = v.to_ascii_lowercase();
                 if lv == "bold" || lv == "bolder" {
                     style.bold = true;
-                } else if let Ok(n) = lv.parse::<u32>() {
-                    if n >= 600 {
-                        style.bold = true;
-                    }
+                } else if let Ok(n) = lv.parse::<u32>()
+                    && n >= 600
+                {
+                    style.bold = true;
                 }
             }
             "font-style" => {
@@ -943,10 +943,10 @@ fn handle_close(b: &mut Builder, name: &str, pending_heading: &mut Option<u8>) {
             // emit a sound inline now so the renderer shows a button.
             if let Some(Link::Sound(path)) = b.link_stack.last().cloned() {
                 let closing_style = b.current_style();
-                let link_present = b.inline_buf.last().map_or(
-                    false,
-                    |r| matches!(&r.link, Some(Link::Sound(p)) if p == &path),
-                );
+                let link_present = b
+                    .inline_buf
+                    .last()
+                    .is_some_and(|r| matches!(&r.link, Some(Link::Sound(p)) if p == &path));
                 if !link_present {
                     b.inline_buf.push(Inline {
                         text: SharedString::default(),

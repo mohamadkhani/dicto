@@ -156,15 +156,15 @@ fn matches_selector(sel: &Selector, target: &ElementCtx<'_>, ancestors: &[Elemen
 }
 
 fn compound_matches(c: &Compound, el: &ElementCtx<'_>) -> bool {
-    if let Some(tag) = &c.tag {
-        if !tag.eq_ignore_ascii_case(el.tag) {
-            return false;
-        }
+    if let Some(tag) = &c.tag
+        && !tag.eq_ignore_ascii_case(el.tag)
+    {
+        return false;
     }
-    if let Some(id) = &c.id {
-        if el.id != Some(id.as_str()) {
-            return false;
-        }
+    if let Some(id) = &c.id
+        && el.id != Some(id.as_str())
+    {
+        return false;
     }
     for cls in &c.classes {
         if !el.classes.iter().any(|c| c == cls) {
@@ -179,7 +179,7 @@ fn parse_selectors(text: &str) -> Vec<Selector> {
         .filter_map(|chunk| {
             let parts: Vec<Compound> = chunk
                 .split_whitespace()
-                .filter_map(|tok| parse_compound(tok))
+                .filter_map(parse_compound)
                 .collect();
             if parts.is_empty() {
                 None

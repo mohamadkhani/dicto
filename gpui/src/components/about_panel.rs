@@ -1,8 +1,8 @@
+use gpui::prelude::FluentBuilder;
 use gpui::{
     FontWeight, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, div, px, img,
+    StatefulInteractiveElement, Styled, div, img, px,
 };
-use gpui::prelude::FluentBuilder;
 use gpui_component::{h_flex, v_flex};
 
 use crate::colors;
@@ -129,12 +129,7 @@ fn info_row(label: &str, value: &str, show_divider: bool) -> gpui::AnyElement {
         .w_full()
         .child(row)
         .when(show_divider, |el| {
-            el.child(
-                div()
-                    .mx(px(14.))
-                    .h(px(1.))
-                    .bg(colors::border()),
-            )
+            el.child(div().mx(px(14.)).h(px(1.)).bg(colors::border()))
         })
         .into_any_element()
 }

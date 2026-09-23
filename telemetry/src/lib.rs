@@ -81,11 +81,7 @@ static TELEMETRY: RwLock<Option<Arc<dyn Telemetry>>> = RwLock::new(None);
 /// - `app_version` — the Dicto version, sent as a system property.
 pub fn init(enabled: bool, installation_id: String, app_version: String) {
     let client: Arc<dyn Telemetry> = if enabled && !is_placeholder_key() {
-        match AptabaseClient::new(
-            APTABASE_APP_KEY.to_string(),
-            installation_id,
-            app_version,
-        ) {
+        match AptabaseClient::new(APTABASE_APP_KEY.to_string(), installation_id, app_version) {
             Ok(client) => Arc::new(client),
             // Constructing the runtime failed — degrade to no-op rather than
             // crash the app over analytics.

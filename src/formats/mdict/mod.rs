@@ -1,9 +1,9 @@
 pub mod parser;
 
 use std::fs::{self, File};
-use std::io::{BufWriter, Write};
 #[cfg(not(unix))]
 use std::io::Read;
+use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
@@ -598,10 +598,10 @@ impl Dictionary for MdxDictionary {
             if let Ok(lev) = Levenshtein::new(&p, dist) {
                 let mut fuzz = idx.map.search(&lev).into_stream();
                 while let Some((key, _)) = fuzz.next() {
-                    if let Ok(s) = std::str::from_utf8(key) {
-                        if seen.insert(s.to_string()) {
-                            results.push(s.to_string());
-                        }
+                    if let Ok(s) = std::str::from_utf8(key)
+                        && seen.insert(s.to_string())
+                    {
+                        results.push(s.to_string());
                     }
                     if results.len() >= limit {
                         break;
@@ -790,7 +790,7 @@ fn mdd_fst_empty(fst_path: &str) -> bool {
         .ok()
         .and_then(|f| unsafe { Mmap::map(&f) }.ok())
         .and_then(|m| Map::new(m).ok())
-        .map(|m| m.len() == 0)
+        .map(|m| m.is_empty())
         .unwrap_or(true)
 }
 

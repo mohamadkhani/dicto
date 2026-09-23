@@ -116,16 +116,15 @@ fn main() {
     }
 
     let app = application();
-    app.with_assets(AppAssets)
-        .run(move |cx: &mut App| {
-            gpui_component::init(cx);
-            Theme::change(ThemeMode::Dark, None, cx);
+    app.with_assets(AppAssets).run(move |cx: &mut App| {
+        gpui_component::init(cx);
+        Theme::change(ThemeMode::Dark, None, cx);
 
-            setup_tray(cx);
-            open_dictionary_window(cx);
+        setup_tray(cx);
+        open_dictionary_window(cx);
 
-            cx.activate(true);
-        });
+        cx.activate(true);
+    });
 }
 
 fn setup_tray(cx: &mut App) {

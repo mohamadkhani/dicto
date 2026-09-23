@@ -1,9 +1,8 @@
 use std::path::PathBuf;
 
 use gpui::{
-    AppContext as _, AsyncApp, Entity, ExternalPaths, FontWeight, InteractiveElement,
-    IntoElement, ParentElement, PathPromptOptions, SharedString, StatefulInteractiveElement,
-    Styled, div, px,
+    AppContext as _, AsyncApp, Entity, ExternalPaths, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, PathPromptOptions, SharedString, StatefulInteractiveElement, Styled, div, px,
 };
 use gpui_component::{h_flex, progress::Progress, scroll::ScrollableElement, v_flex};
 use mdict_rs::settings::DictEntry;
@@ -144,7 +143,9 @@ fn drop_zone(state: Entity<DictState>, is_importing: bool) -> gpui::AnyElement {
                             files: true,
                             directories: false,
                             multiple: true,
-                            prompt: Some(SharedString::from("Select Dictionary Files (MDX · MDD · CSS · JS · PNG)")),
+                            prompt: Some(SharedString::from(
+                                "Select Dictionary Files (MDX · MDD · CSS · JS · PNG)",
+                            )),
                         })
                     });
                     if let Ok(Ok(Some(paths))) = rx.await {
@@ -269,42 +270,41 @@ pub fn start_import(paths: Vec<PathBuf>, state: Entity<DictState>, cx: &mut gpui
     }
 
     let paths: Vec<PathBuf> = paths;
-    let (mdx_mdd, non_mdx_mdd): (Vec<PathBuf>, Vec<PathBuf>) =
-        paths.into_iter().partition(|p| {
+    let (mdx_mdd, non_mdx_mdd): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|p| {
+        p.extension()
+            .map(|e| e.eq_ignore_ascii_case("mdx") || e.eq_ignore_ascii_case("mdd"))
+            .unwrap_or(false)
+    });
+
+    let (css_js_png, others): (Vec<PathBuf>, Vec<PathBuf>) =
+        non_mdx_mdd.into_iter().partition(|p| {
             p.extension()
-                .map(|e| e.eq_ignore_ascii_case("mdx") || e.eq_ignore_ascii_case("mdd"))
+                .map(|e| {
+                    e.eq_ignore_ascii_case("css")
+                        || e.eq_ignore_ascii_case("js")
+                        || e.eq_ignore_ascii_case("png")
+                })
                 .unwrap_or(false)
         });
 
-    let (css_js_png, others): (Vec<PathBuf>, Vec<PathBuf>) = non_mdx_mdd
-        .into_iter()
-        .partition(|p| {
-            p.extension()
-                .map(|e| e.eq_ignore_ascii_case("css")
-                    || e.eq_ignore_ascii_case("js")
-                    || e.eq_ignore_ascii_case("png"))
-                .unwrap_or(false)
-        });
+    let (css_files, js_png): (Vec<PathBuf>, Vec<PathBuf>) = css_js_png.into_iter().partition(|p| {
+        p.extension()
+            .map(|e| e.eq_ignore_ascii_case("css"))
+            .unwrap_or(false)
+    });
 
-    let (css_files, js_png): (Vec<PathBuf>, Vec<PathBuf>) = css_js_png
-        .into_iter()
-        .partition(|p| {
-            p.extension()
-                .map(|e| e.eq_ignore_ascii_case("css"))
-                .unwrap_or(false)
-        });
-
-    let (js_files, png_files): (Vec<PathBuf>, Vec<PathBuf>) = js_png
-        .into_iter()
-        .partition(|p| {
-            p.extension()
-                .map(|e| e.eq_ignore_ascii_case("js"))
-                .unwrap_or(false)
-        });
+    let (js_files, png_files): (Vec<PathBuf>, Vec<PathBuf>) = js_png.into_iter().partition(|p| {
+        p.extension()
+            .map(|e| e.eq_ignore_ascii_case("js"))
+            .unwrap_or(false)
+    });
 
     let all_valid_stems: std::collections::HashSet<String> = mdx_mdd
         .iter()
-        .filter_map(|p| p.file_stem().and_then(|s| s.to_str().map(|s| s.to_lowercase())))
+        .filter_map(|p| {
+            p.file_stem()
+                .and_then(|s| s.to_str().map(|s| s.to_lowercase()))
+        })
         .collect();
 
     let dicts_dir = mdict_rs::config::dirs_config_path();
@@ -315,18 +315,19 @@ pub fn start_import(paths: Vec<PathBuf>, state: Entity<DictState>, cx: &mut gpui
         .flatten()
         .filter_map(|e| {
             let path = e.path();
-            if path.extension()?.eq_ignore_ascii_case("mdx") || path.extension()?.eq_ignore_ascii_case("mdd") {
-                path.file_stem().and_then(|s| s.to_str().map(|s| s.to_lowercase()))
+            if path.extension()?.eq_ignore_ascii_case("mdx")
+                || path.extension()?.eq_ignore_ascii_case("mdd")
+            {
+                path.file_stem()
+                    .and_then(|s| s.to_str().map(|s| s.to_lowercase()))
             } else {
                 None
             }
         })
         .collect();
 
-    let all_stems: std::collections::HashSet<String> = all_valid_stems
-        .union(&existing_stems)
-        .cloned()
-        .collect();
+    let all_stems: std::collections::HashSet<String> =
+        all_valid_stems.union(&existing_stems).cloned().collect();
 
     let mut valid: Vec<PathBuf> = mdx_mdd;
     let mut invalid: Vec<(PathBuf, String)> = Vec::new();
@@ -341,17 +342,24 @@ pub fn start_import(paths: Vec<PathBuf>, state: Entity<DictState>, cx: &mut gpui
     }
 
     for css in css_files {
-        let css_stem = css.file_stem().and_then(|s| s.to_str().map(|s| s.to_lowercase()));
-        if css_stem.map_or(true, |stem| !all_stems.contains(&stem)) {
-            invalid.push((css, "CSS file must have a matching .mdx or .mdd file".into()));
+        let css_stem = css
+            .file_stem()
+            .and_then(|s| s.to_str().map(|s| s.to_lowercase()));
+        if css_stem.is_none_or(|stem| !all_stems.contains(&stem)) {
+            invalid.push((
+                css,
+                "CSS file must have a matching .mdx or .mdd file".into(),
+            ));
         } else {
             valid.push(css);
         }
     }
 
     for js in js_files {
-        let js_stem = js.file_stem().and_then(|s| s.to_str().map(|s| s.to_lowercase()));
-        if js_stem.map_or(true, |stem| !all_stems.contains(&stem)) {
+        let js_stem = js
+            .file_stem()
+            .and_then(|s| s.to_str().map(|s| s.to_lowercase()));
+        if js_stem.is_none_or(|stem| !all_stems.contains(&stem)) {
             invalid.push((js, "JS file must have a matching .mdx or .mdd file".into()));
         } else {
             valid.push(js);
@@ -359,9 +367,14 @@ pub fn start_import(paths: Vec<PathBuf>, state: Entity<DictState>, cx: &mut gpui
     }
 
     for png in png_files {
-        let png_stem = png.file_stem().and_then(|s| s.to_str().map(|s| s.to_lowercase()));
-        if png_stem.map_or(true, |stem| !all_stems.contains(&stem)) {
-            invalid.push((png, "PNG file must have a matching .mdx or .mdd file".into()));
+        let png_stem = png
+            .file_stem()
+            .and_then(|s| s.to_str().map(|s| s.to_lowercase()));
+        if png_stem.is_none_or(|stem| !all_stems.contains(&stem)) {
+            invalid.push((
+                png,
+                "PNG file must have a matching .mdx or .mdd file".into(),
+            ));
         } else {
             valid.push(png);
         }
@@ -415,18 +428,26 @@ pub fn start_import(paths: Vec<PathBuf>, state: Entity<DictState>, cx: &mut gpui
     cx.spawn(async move |cx: &mut AsyncApp| {
         let import_started = std::time::Instant::now();
         let mut total_bytes: u64 = 0;
-        let mut stems: std::collections::HashMap<String, StemGroup> = std::collections::HashMap::new();
+        let mut stems: std::collections::HashMap<String, StemGroup> =
+            std::collections::HashMap::new();
 
         for idx in valid_start..valid_end {
             let (path, stem_lower) = cx.update(|cx| {
                 let f = &state.read(cx).import_files[idx];
-                let stem = f.path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
+                let stem = f
+                    .path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unknown");
                 let stem_lower = stem.to_lowercase();
                 (f.path.clone(), stem_lower)
             });
 
             let group = stems.entry(stem_lower).or_default();
-            let ext = path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase());
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_lowercase());
             if ext.as_deref() == Some("mdx") {
                 group.mdx_idx = Some(idx);
             }
@@ -445,7 +466,8 @@ pub fn start_import(paths: Vec<PathBuf>, state: Entity<DictState>, cx: &mut gpui
                     cx.update(|cx| {
                         cx.update_entity(&state, |s, cx| {
                             if let Some(f) = s.import_files.get_mut(*idx) {
-                                f.status = ImportStatus::Error(format!("Cannot create dict folder: {e}"));
+                                f.status =
+                                    ImportStatus::Error(format!("Cannot create dict folder: {e}"));
                             }
                             cx.notify();
                         });
@@ -456,7 +478,7 @@ pub fn start_import(paths: Vec<PathBuf>, state: Entity<DictState>, cx: &mut gpui
 
             for (idx, src_path) in group.files {
                 let filename = src_path.file_name().unwrap_or_default();
-                let dest_path = stem_path.join(&filename);
+                let dest_path = stem_path.join(filename);
 
                 cx.update(|cx| {
                     cx.update_entity(&state, |s, cx| {
@@ -494,9 +516,11 @@ pub fn start_import(paths: Vec<PathBuf>, state: Entity<DictState>, cx: &mut gpui
                     .unwrap_or(false);
                 let is_css_js_png = dest_path
                     .extension()
-                    .map(|e| e.eq_ignore_ascii_case("css")
-                        || e.eq_ignore_ascii_case("js")
-                        || e.eq_ignore_ascii_case("png"))
+                    .map(|e| {
+                        e.eq_ignore_ascii_case("css")
+                            || e.eq_ignore_ascii_case("js")
+                            || e.eq_ignore_ascii_case("png")
+                    })
                     .unwrap_or(false);
 
                 if is_mdd {

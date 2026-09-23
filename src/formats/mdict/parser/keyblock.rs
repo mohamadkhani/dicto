@@ -21,9 +21,8 @@ impl<'a> Reader<'a> {
         Self { data, pos: 0 }
     }
     fn bytes(&mut self, n: usize) -> Option<&'a [u8]> {
-        self.data.get(self.pos..self.pos + n).map(|s| {
+        self.data.get(self.pos..self.pos + n).inspect(|_s| {
             self.pos += n;
-            s
         })
     }
     fn u8(&mut self) -> Option<u8> {

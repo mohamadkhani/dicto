@@ -17,9 +17,9 @@ use serde::{Serialize, Serializer};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
-use crate::event::{sanitize_message, ErrorKind, Event};
-use crate::sysprops::SystemProps;
 use crate::Telemetry;
+use crate::event::{ErrorKind, Event, sanitize_message};
+use crate::sysprops::SystemProps;
 
 /// Flush when this many events accumulate.
 const MAX_BATCH: usize = 20;
@@ -48,8 +48,10 @@ fn serialize_props<S: Serializer>(
         None => serializer.serialize_none(),
         Some(pairs) => {
             // BTreeMap gives stable key ordering and serializes as { ... }.
-            let map: BTreeMap<&str, &str> =
-                pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+            let map: BTreeMap<&str, &str> = pairs
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
             map.serialize(serializer)
         }
     }
@@ -241,7 +243,16 @@ async fn flusher(
                 Err(_) => break,
             }
         }
-        finalize_and_send(&client, &url, app_key.as_str(), &mut buffer, &system_props, &session_id, &installation_id).await;
+        finalize_and_send(
+            &client,
+            &url,
+            app_key.as_str(),
+            &mut buffer,
+            &system_props,
+            &session_id,
+            &installation_id,
+        )
+        .await;
     }
 }
 
@@ -372,9 +383,7 @@ fn epoch_to_iso8601(epoch: u64) -> String {
 
     let (year, month, day) = civil_from_days(days as i64);
 
-    format!(
-        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z"
-    )
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
 /// Howard Hinnant's days→(year,month,day) algorithm. Proleptic Gregorian.

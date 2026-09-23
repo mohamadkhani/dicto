@@ -4,7 +4,12 @@ use gpui::{
     AppContext as _, Context, Entity, FontWeight, InteractiveElement, IntoElement, KeyDownEvent,
     ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
-use gpui_component::{Root, TitleBar, WindowExt, h_flex, input::InputState, tab::{Tab, TabBar}, v_flex};
+use gpui_component::{
+    Root, TitleBar, WindowExt, h_flex,
+    input::InputState,
+    tab::{Tab, TabBar},
+    v_flex,
+};
 
 use crate::colors;
 use crate::components::{
@@ -100,11 +105,9 @@ impl DictApp {
 
                     if should_preview {
                         let word_for_result = word.clone();
-                        dicto_telemetry::get().track(
-                            dicto_telemetry::Event::LookupPerformed {
-                                source: dicto_telemetry::LookupSource::AutoPreview,
-                            },
-                        );
+                        dicto_telemetry::get().track(dicto_telemetry::Event::LookupPerformed {
+                            source: dicto_telemetry::LookupSource::AutoPreview,
+                        });
                         let results = cx
                             .background_executor()
                             .spawn(async move {
@@ -447,7 +450,11 @@ fn cog_button(state: Entity<DictState>) -> gpui::AnyElement {
         .into_any_element()
 }
 
-fn open_get_dictionaries_dialog(state: Entity<DictState>, window: &mut Window, cx: &mut Context<DictApp>) {
+fn open_get_dictionaries_dialog(
+    state: Entity<DictState>,
+    window: &mut Window,
+    cx: &mut Context<DictApp>,
+) {
     let s = state;
     window.open_dialog(cx, move |dialog, _window, _cx| {
         dialog
@@ -463,7 +470,8 @@ fn open_get_dictionaries_dialog(state: Entity<DictState>, window: &mut Window, c
                     let is_importing = s.read(cx).import_files.iter().any(|f| {
                         matches!(
                             f.status,
-                            crate::state::ImportStatus::Copying | crate::state::ImportStatus::Indexing
+                            crate::state::ImportStatus::Copying
+                                | crate::state::ImportStatus::Indexing
                         )
                     });
 
@@ -491,9 +499,17 @@ fn open_get_dictionaries_dialog(state: Entity<DictState>, window: &mut Window, c
                                 ),
                             )
                             .child(if active_tab == 0 {
-                                crate::components::download_panel::download_tab_content(s.clone(), window, cx)
+                                crate::components::download_panel::download_tab_content(
+                                    s.clone(),
+                                    window,
+                                    cx,
+                                )
                             } else {
-                                crate::components::import_panel::import_panel_content(s.clone(), is_importing, cx)
+                                crate::components::import_panel::import_panel_content(
+                                    s.clone(),
+                                    is_importing,
+                                    cx,
+                                )
                             }),
                     )
                 }

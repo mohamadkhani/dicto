@@ -545,11 +545,11 @@ fn cache_image(src: &str, bytes: &[u8]) -> Option<PathBuf> {
     }
 
     let path = dir.join(format!("{hash:016x}.{ext}"));
-    if !path.exists() {
-        if let Err(e) = fs::write(&path, bytes) {
-            warn!("could not write image cache: {e}");
-            return None;
-        }
+    if !path.exists()
+        && let Err(e) = fs::write(&path, bytes)
+    {
+        warn!("could not write image cache: {e}");
+        return None;
     }
     Some(path)
 }
