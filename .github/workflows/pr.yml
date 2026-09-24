@@ -1,0 +1,89 @@
+name: PR Test Build
+
+on:
+  pull_request:
+  workflow_dispatch:  # Manual run without a PR
+
+concurrency:
+  group: pr-build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PR_ID: ${{ github.event.pull_request.number || github.run_number }}
+
+jobs:
+  package-check:
+    # Proves the crate is publishable without touching crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish dry-run (mdict-rs)
+        run: cargo publish --dry-run --package mdict-rs
+
+  build-linux:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm base-devel git gtk3 alsa-lib libxkbcommon libxkbcommon-x11 xdotool clang pkgconf upx
+
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: cargo build --release --package dicto
+
+      - name: Compress binary with UPX
+        run: upx --best --lzma target/release/dicto
+
+      - name: Package tarball
+        run: |
+          mkdir -p dist
+          cp target/release/dicto dist/
+          cp packaging/arch/dicto.desktop dist/
+          cp assets/icon.svg dist/
+          cp LICENSE dist/
+          cd dist
+          tar czf ../dicto-pr-${PR_ID}-x86_64-unknown-linux-gnu.tar.gz \
+            dicto dicto.desktop icon.svg LICENSE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dicto-pr${{ env.PR_ID }}-linux
+          path: dicto-*.tar.gz
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install UPX
+        run: choco install upx -y --no-progress
+
+      - name: Build Windows executable (release)
+        run: cargo build --release --package dicto
+
+      - name: Compress binary with UPX
+        shell: bash
+        run: upx --best --lzma target/release/dicto.exe
+
+      - name: Create portable package
+        run: |
+          mkdir portable
+          copy target\release\dicto.exe portable\
+          copy LICENSE portable\
+          copy README.md portable\
+          Compress-Archive -Path portable\* -DestinationPath dicto-pr-$env:PR_ID-windows-x86_64-portable.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dicto-pr${{ env.PR_ID }}-windows
+          path: dicto-*-windows-x86_64-portable.zip

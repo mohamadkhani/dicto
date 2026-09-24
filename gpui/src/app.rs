@@ -168,6 +168,124 @@ impl DictApp {
             });
         }
 
+        // Start periodic polling for quick-translate hotkey events and
+        // tray-menu triggers. Runs every 100ms while the app is alive.
+        let poll_state = state.clone();
+        cx.spawn(async move |_this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+
+                // Check the tray menu trigger flag
+                let tray_triggered = crate::TRAY_TRANSLATE_TRIGGERED
+                    .swap(false, std::sync::atomic::Ordering::Acquire);
+
+                // Check hotkey events and tray flag. `poll()` opens the popup
+                // for hotkey activations; the tray/IPC flag is a separate manual
+                // trigger. Both end up in an `Idle` state showing the selection
+                // + a Translate button — the translation only runs on click.
+                let triggered = cx.update_entity(&poll_state, |s, _cx| {
+                    let tts_key = crate::playback::tts_key(&s.quick_translate.tts);
+                    let (triggered, new_text) =
+                        if let Some(engine) = s.quick_translate_engine.as_mut() {
+                            let hotkey_fired = engine.poll();
+                            if hotkey_fired || tray_triggered {
+                                // `poll()` already opened the popup for hotkey
+                                // events; for the tray flag we trigger manually.
+                                if !hotkey_fired {
+                                    engine.trigger_translate();
+                                }
+                                // Read the new text from popup_status (now set
+                                // to the new selection's Idle state).
+                                let new_text: String = match engine.popup_status() {
+                                    crate::quick_translate::PopupStatus::Visible(
+                                        crate::components::translate_popup::PopupState::Idle {
+                                            original,
+                                        },
+                                    ) => original.clone(),
+                                    _ => String::new(),
+                                };
+                                (true, new_text)
+                            } else {
+                                (false, String::new())
+                            }
+                        } else {
+                            (false, String::new())
+                        };
+                    // A new selection (or a re-trigger) makes any TTS clip
+                    // speaking the previous selection stale — stop it. The
+                    // translation slot is also keyed to the popup's
+                    // original, so it's stale too.
+                    if triggered {
+                        if new_text.is_empty() {
+                            s.invalidate_tts_clips(None, Some(&tts_key));
+                        } else {
+                            s.invalidate_tts_clips(Some(&new_text), Some(&tts_key));
+                        }
+                    }
+                    triggered
+                });
+
+                // The popup is open whenever the engine status is Visible.
+                // Reopen it whenever it is visible but has no window — this
+                // both opens the first time AND replaces the window after a
+                // tokenless re-trigger closed it on the previous tick (the
+                // tick gap lets GPUI finish tearing the old surface down;
+                // removing + opening in one tick leaves the new window
+                // unpainted/black).
+                let popup_visible = cx.read_entity(&poll_state, |s, _cx| {
+                    matches!(
+                        s.quick_translate_engine.as_ref().map(|e| e.popup_status()),
+                        Some(crate::quick_translate::PopupStatus::Visible(_))
+                    )
+                });
+                let has_window = cx.read_entity(&poll_state, |s, _cx| s.qt_popup_window.is_some());
+                // True while a tokenless re-trigger has closed the window and
+                // is waiting for its reopen tick (the window-closed observer
+                // hides the engine otherwise).
+                let replace_pending = cx.read_entity(&poll_state, |s, _cx| s.qt_replace_pending);
+                let wants_popup = popup_visible || replace_pending;
+
+                let mut replaced_this_tick = false;
+                // Drain the tray token EVERY tick: it is only meaningful in
+                // the same tick as its trigger (the tray click sets both).
+                // A token left over from an earlier click is stale — Mutter
+                // silently ignores activations with it, so letting it take
+                // the activate branch would swallow the whole trigger.
+                let tray_token = crate::take_tray_translate_token();
+                tracing::debug!(
+                    triggered,
+                    popup_visible,
+                    has_window,
+                    tray_token = tray_token.is_some(),
+                    "qt poll tick"
+                );
+                if triggered && popup_visible && has_window {
+                    if let Some(token) = tray_token {
+                        cx.update(|cx: &mut gpui::App| {
+                            activate_popup_window(&poll_state, &token, cx)
+                        });
+                    } else {
+                        // Keyboard-shortcut / IPC re-trigger: close the old
+                        // popup now; the next poll tick opens a fresh one
+                        // (freshly mapped windows get keyboard focus on
+                        // GNOME/Mutter, activated ones don't).
+                        cx.update(|cx: &mut gpui::App| close_popup_window(&poll_state, cx));
+                        replaced_this_tick = true;
+                    }
+                }
+
+                if wants_popup && !replaced_this_tick && !has_window {
+                    let res = cx.update(|cx: &mut gpui::App| open_translate_popup(&poll_state, cx));
+                    if let Err(e) = res {
+                        tracing::error!(error = %e, "failed to open translate popup");
+                    }
+                }
+            }
+        })
+        .detach();
+
         Self { state, input }
     }
 
@@ -301,6 +419,130 @@ impl Render for DictApp {
     }
 }
 
+/// Open (or refresh) the Quick Translate popup window.
+///
+/// The popup is a borderless `WindowKind::PopUp` that reads its content from
+/// the shared `DictState`'s `popup_status`, so once it exists we only need to
+/// notify it to re-render with the latest translation result.
+fn open_translate_popup(state: &Entity<DictState>, cx: &mut gpui::App) -> anyhow::Result<()> {
+    use gpui::{
+        Bounds, WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowKind,
+        WindowOptions, size,
+    };
+
+    // Open the popup at (roughly) its natural height. Creating it at a
+    // default 560px and shrinking after the first paint visibly moved the
+    // popup upward (window resizes anchor the top edge). Text sections have
+    // fixed heights, so the estimate lands within a few px; the poll tick
+    // corrects the remainder from the real painted measurements. Resizable
+    // as an escape hatch.
+    let status = state
+        .read(cx)
+        .quick_translate_engine
+        .as_ref()
+        .map(|e| e.popup_status().clone());
+    let initial_height =
+        crate::components::translate_popup::estimated_window_height(match &status {
+            Some(crate::quick_translate::PopupStatus::Visible(popup_state)) => Some(popup_state),
+            _ => None,
+        });
+    let bounds = Bounds::centered(None, size(px(460.), px(initial_height)), cx);
+    let state_for_window = state.clone();
+
+    let handle = cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            window_decorations: Some(WindowDecorations::Client),
+            titlebar: Some(gpui::TitlebarOptions {
+                title: Some("Dicto Translate".into()),
+                ..Default::default()
+            }),
+            kind: WindowKind::PopUp,
+            is_resizable: true,
+            is_minimizable: false,
+            focus: true,
+            show: true,
+            app_id: Some("dicto".into()),
+            // The popup paints its own rounded card; everything outside the
+            // card must be real transparency. Since the gpui fork bump the
+            // popup is a real xdg_popup on Wayland, and Mutter no longer
+            // rounds its corners for us — an opaque window would show a
+            // black square behind the card's rounded corners.
+            window_background: WindowBackgroundAppearance::Transparent,
+            ..Default::default()
+        },
+        |window, cx| {
+            cx.new(|cx| {
+                let view = cx.new(|cx| {
+                    crate::components::translate_popup::TranslatePopupView::new(
+                        state_for_window.clone(),
+                        window,
+                        cx,
+                    )
+                });
+                // `Root` wrapper: the Original text editor (gpui-component
+                // `Input`) requires the window's root view to be a `Root`.
+                // `bordered(false)`: the popup card paints its own border and
+                // rounding; Root's client-decoration border would draw a
+                // second frame around it. `bg(transparent)`: Root's default
+                // theme background (near-black in dark mode) would otherwise
+                // fill the corners outside the rounded card.
+                gpui_component::Root::new(view, window, cx)
+                    .bordered(false)
+                    .bg(gpui::transparent_black())
+            })
+        },
+    )?;
+
+    state.update(cx, |s, _cx| {
+        s.qt_popup_window = Some(handle);
+        s.qt_replace_pending = false;
+    });
+    tracing::info!("translate popup: created new window");
+
+    Ok(())
+}
+
+/// Close the popup window only — the engine keeps its (new) popup state and
+/// the poll loop reopens a fresh window on the next tick. The replace-pending
+/// flag makes the window-closed observer keep the popup state alive.
+fn close_popup_window(state: &Entity<DictState>, cx: &mut gpui::App) {
+    // Flag + detach the handle BEFORE removing: the window-closed observer
+    // fires inside `remove_window`'s update and must see replace_pending
+    // (and no stored handle) to leave the popup state untouched.
+    let handle = state.read(cx).qt_popup_window;
+    state.update(cx, |s, _cx| {
+        s.qt_replace_pending = true;
+        s.qt_popup_window = None;
+    });
+    if let Some(handle) = handle {
+        let _ = handle.update(cx, |_, window, _cx| {
+            window.remove_window();
+        });
+    }
+}
+
+/// Raise + focus the existing popup with a compositor-minted token (tray
+/// click). Clears the stored handle if the window is already gone.
+fn activate_popup_window(state: &Entity<DictState>, token: &str, cx: &mut gpui::App) {
+    let Some(handle) = state.read(cx).qt_popup_window else {
+        return;
+    };
+    let token = token.to_string();
+    let alive = handle
+        .update(cx, move |_view, window, cx| {
+            window.activate_with_token(&token);
+            cx.notify();
+        })
+        .is_ok();
+    if alive {
+        tracing::info!("translate popup: activating existing window (tray token)");
+    } else {
+        tracing::warn!("translate popup: stale window handle on activation");
+        state.update(cx, |s, _cx| s.qt_popup_window = None);
+    }
+}
+
 /// Slim progress bar shown while background indexing is running.
 /// Returns an empty fragment when `indexing_total == 0` so we don't
 /// reserve vertical space in the idle state.
@@ -422,11 +664,17 @@ fn cog_button(state: Entity<DictState>) -> gpui::AnyElement {
                                         cx,
                                     )
                                 } else if active_tab == 3 {
+                                    crate::components::quick_translate_panel::quick_translate_tab_content(
+                                        state.clone(),
+                                        window,
+                                        cx,
+                                    )
+                                } else if active_tab == 4 {
                                     crate::components::settings_panel::telemetry_tab_content(
                                         state.clone(),
                                         cx,
                                     )
-                                } else if active_tab == 4 {
+                                } else if active_tab == 5 {
                                     crate::components::about_panel::panel_content()
                                 } else {
                                     let is_importing =
