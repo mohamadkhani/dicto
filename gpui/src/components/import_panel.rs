@@ -345,7 +345,7 @@ pub fn start_import(paths: Vec<PathBuf>, state: Entity<DictState>, cx: &mut gpui
         let css_stem = css
             .file_stem()
             .and_then(|s| s.to_str().map(|s| s.to_lowercase()));
-        if css_stem.map_or(true, |stem| !all_stems.contains(&stem)) {
+        if css_stem.is_none_or(|stem| !all_stems.contains(&stem)) {
             invalid.push((
                 css,
                 "CSS file must have a matching .mdx or .mdd file".into(),
@@ -359,7 +359,7 @@ pub fn start_import(paths: Vec<PathBuf>, state: Entity<DictState>, cx: &mut gpui
         let js_stem = js
             .file_stem()
             .and_then(|s| s.to_str().map(|s| s.to_lowercase()));
-        if js_stem.map_or(true, |stem| !all_stems.contains(&stem)) {
+        if js_stem.is_none_or(|stem| !all_stems.contains(&stem)) {
             invalid.push((js, "JS file must have a matching .mdx or .mdd file".into()));
         } else {
             valid.push(js);
@@ -370,7 +370,7 @@ pub fn start_import(paths: Vec<PathBuf>, state: Entity<DictState>, cx: &mut gpui
         let png_stem = png
             .file_stem()
             .and_then(|s| s.to_str().map(|s| s.to_lowercase()));
-        if png_stem.map_or(true, |stem| !all_stems.contains(&stem)) {
+        if png_stem.is_none_or(|stem| !all_stems.contains(&stem)) {
             invalid.push((
                 png,
                 "PNG file must have a matching .mdx or .mdd file".into(),
@@ -478,7 +478,7 @@ pub fn start_import(paths: Vec<PathBuf>, state: Entity<DictState>, cx: &mut gpui
 
             for (idx, src_path) in group.files {
                 let filename = src_path.file_name().unwrap_or_default();
-                let dest_path = stem_path.join(&filename);
+                let dest_path = stem_path.join(filename);
 
                 cx.update(|cx| {
                     cx.update_entity(&state, |s, cx| {

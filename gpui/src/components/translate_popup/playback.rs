@@ -215,7 +215,7 @@ pub(crate) fn playback_controls(
             // A STALE clip (loaded for different text or different TTS
             // settings) always synthesizes — pausing/replaying it would play
             // the wrong audio.
-            let snapshot = slot.controller(&state.read(cx)).snapshot();
+            let snapshot = slot.controller(state.read(cx)).snapshot();
             let stale = clip_stale(&snapshot, &text, &tts);
             match snapshot.0 {
                 PlaybackState::Loading => {}
@@ -238,7 +238,7 @@ pub(crate) fn playback_controls(
                 PlaybackState::Playing { .. }
                 | PlaybackState::Paused { .. }
                 | PlaybackState::Ended { .. } => {
-                    let _ = cx.update_entity(&state, |s, _cx| {
+                    cx.update_entity(&state, |s, _cx| {
                         slot.controller_mut(s).toggle_pause();
                     });
                 }
@@ -278,7 +278,7 @@ fn spawn_speak(
 ) {
     // Read the controller's decision via the entity (slot picks source/translation).
     let action =
-        slot.controller(&state.read(cx))
+        slot.controller(state.read(cx))
             .start_load(text.clone(), lang.clone(), Some(tts.clone()));
     if let crate::playback::LoadAction::Synthesize { text, lang, tts } = action {
         // `text` and `tts` are each needed twice: once for synthesis (moved
@@ -295,7 +295,7 @@ fn spawn_speak(
                     .await;
             match result {
                 Ok(bytes) => {
-                    let _ = cx.update_entity(&state, |s, _cx| {
+                    cx.update_entity(&state, |s, _cx| {
                         slot.controller_mut(s).install_from_bytes(
                             text_for_install,
                             tts_for_install,
@@ -304,7 +304,7 @@ fn spawn_speak(
                     });
                 }
                 Err(e) => {
-                    let _ = cx.update_entity(&state, |s, _cx| {
+                    cx.update_entity(&state, |s, _cx| {
                         slot.controller_mut(s).fail(e.to_string());
                     });
                 }
@@ -386,7 +386,7 @@ fn seek_bar(
             };
             let rel = (ev.position().x - b.left()).max(px(0.));
             let fraction = (rel / b.size.width).clamp(0.0, 1.0);
-            let _ = cx.update_entity(&state, |s, _cx| {
+            cx.update_entity(&state, |s, _cx| {
                 slot.controller_mut(s).seek(fraction);
             });
         })

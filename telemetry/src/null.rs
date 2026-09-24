@@ -2,8 +2,8 @@
 //! in or when the Aptabase app key is still a placeholder. [`track`] is a
 //! zero-cost no-op, so opted-out call sites pay nothing.
 
-use crate::event::Event;
 use crate::Telemetry;
+use crate::event::Event;
 
 pub struct NullTelemetry;
 

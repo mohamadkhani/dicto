@@ -26,6 +26,7 @@ pub enum PopupStatus {
 }
 
 impl PopupStatus {
+    #[allow(dead_code)]
     pub fn is_visible(&self) -> bool {
         matches!(self, PopupStatus::Visible(_))
     }
@@ -264,11 +265,13 @@ impl QuickTranslateEngine {
     }
 
     /// The configured target language tag (e.g. `"fa"`, `"en"`).
+    #[allow(dead_code)]
     pub fn target_lang(&self) -> &str {
         &self.settings.target_lang
     }
 
     /// The TTS settings (AI TTS config; falls back to platform TTS if unset).
+    #[allow(dead_code)]
     pub fn tts_settings(&self) -> &mdict_rs::settings::TtsSettings {
         &self.settings.tts
     }

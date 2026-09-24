@@ -24,6 +24,7 @@ use tracing::{info, warn};
 ///
 /// Runs on a background thread so the UI never blocks on the HTTP request or
 /// audio decoding.
+#[allow(dead_code)]
 pub fn speak(text: &str, lang_hint: Option<&str>, tts: Option<&TtsSettings>) {
     if text.trim().is_empty() {
         return;
@@ -62,6 +63,7 @@ pub(crate) fn synthesize_bytes(
     synthesize_platform(text, lang_hint)
 }
 
+#[allow(dead_code)]
 fn speak_blocking(
     text: &str,
     lang_hint: Option<&str>,
@@ -148,7 +150,7 @@ impl AiTtsClient {
 fn synthesize_platform(text: &str, lang_hint: Option<&str>) -> anyhow::Result<Vec<u8>> {
     #[cfg(target_os = "linux")]
     {
-        return synthesize_linux(text, lang_hint);
+        synthesize_linux(text, lang_hint)
     }
     #[cfg(target_os = "macos")]
     {
@@ -228,6 +230,7 @@ fn synthesize_windows(text: &str, _lang_hint: Option<&str>) -> anyhow::Result<Ve
 
 /// Decode and play an in-memory audio buffer through rodio (mirrors
 /// `audio::try_play_buffer` but without the telemetry / fallback paths).
+#[allow(dead_code)]
 fn play_bytes(bytes: &[u8]) -> anyhow::Result<()> {
     let (_stream, handle) = rodio::OutputStream::try_default()
         .map_err(|e| anyhow::anyhow!("no default audio output: {e}"))?;

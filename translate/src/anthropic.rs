@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument, warn};
 
-use crate::{MAX_TEXT_LENGTH, TranslateError, Translator, TranslationRequest, TranslationResult};
+use crate::{MAX_TEXT_LENGTH, TranslateError, TranslationRequest, TranslationResult, Translator};
 
 /// Default Anthropic model.
 pub const DEFAULT_MODEL: &str = "claude-sonnet-4-6";
@@ -52,7 +52,9 @@ impl AnthropicTranslatorBuilder {
     pub fn build(self) -> AnthropicTranslator {
         let api_key = self.api_key.unwrap_or_default();
         let model = self.model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
-        let base_url = self.base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+        let base_url = self
+            .base_url
+            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
 
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(30))

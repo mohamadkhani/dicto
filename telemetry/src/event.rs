@@ -25,9 +25,7 @@ pub enum Event {
     /// The user clicked the pronunciation play button (intent).
     PronunciationPlayed,
     /// A pronunciation playback actually failed.
-    PronunciationPlaybackFailed {
-        reason: PlaybackFailureReason,
-    },
+    PronunciationPlaybackFailed { reason: PlaybackFailureReason },
     /// A dictionary was imported. `count` is the total number of enabled
     /// dictionaries after the import — never the dictionary name/path.
     /// `duration_ms` is the wall-clock time of the whole import batch
@@ -54,10 +52,7 @@ pub enum Event {
     /// An error the user would notice (failed indexing or failed import).
     /// `message` is truncated to 180 chars and path prefixes stripped by the
     /// client before sending.
-    ErrorOccurred {
-        kind: ErrorKind,
-        message: String,
-    },
+    ErrorOccurred { kind: ErrorKind, message: String },
     /// The user triggered quick translate via hotkey or tray menu.
     /// `source` records how it was triggered; no text content is recorded.
     QuickTranslateTriggered { source: QuickTranslateSource },

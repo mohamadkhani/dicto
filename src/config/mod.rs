@@ -60,10 +60,9 @@ fn collect_files_with_ext(dir: &PathBuf, ext: &str, out: &mut Vec<String>) {
             .extension()
             .map(|e| e.eq_ignore_ascii_case(ext))
             .unwrap_or(false)
+            && let Some(s) = path.to_str()
         {
-            if let Some(s) = path.to_str() {
-                out.push(s.to_string());
-            }
+            out.push(s.to_string());
         }
     }
 }

@@ -42,12 +42,10 @@ fn play_or_transcode(path: &str, bytes: Vec<u8>) {
     }
 
     // rodio can play these directly; skip ffmpeg.
-    if !needs_transcode(path, &bytes) {
-        if try_play_buffer(&bytes) {
-            return;
-        }
-        // fall through and let ffmpeg have a go
+    if !needs_transcode(path, &bytes) && try_play_buffer(&bytes) {
+        return;
     }
+    // fall through and let ffmpeg have a go
 
     if !decode_via_ffmpeg(&bytes, &cached) {
         return; // decode_via_ffmpeg already logged the reason

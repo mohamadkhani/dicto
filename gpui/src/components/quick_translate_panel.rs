@@ -427,7 +427,7 @@ fn ensure_qt_inputs(
     // Already initialized: reconcile values for external changes only.
     // `focused()` guards against clobbering the field the user is editing.
     reconcile(
-        &state,
+        state,
         &settings.api_key,
         |st| &st.qt_api_key_input,
         |st| &mut st.quick_translate.api_key,
@@ -436,7 +436,7 @@ fn ensure_qt_inputs(
         false,
     );
     reconcile(
-        &state,
+        state,
         &settings.api_base_url,
         |st| &st.qt_base_url_input,
         |st| &mut st.quick_translate.api_base_url,
@@ -445,7 +445,7 @@ fn ensure_qt_inputs(
         false,
     );
     reconcile(
-        &state,
+        state,
         &settings.model,
         |st| &st.qt_model_input,
         |st| &mut st.quick_translate.model,
@@ -454,7 +454,7 @@ fn ensure_qt_inputs(
         false,
     );
     reconcile(
-        &state,
+        state,
         &settings.target_lang,
         |st| &st.qt_target_lang_input,
         |st| &mut st.quick_translate.target_lang,
@@ -464,7 +464,7 @@ fn ensure_qt_inputs(
     );
     // TTS reconciliation (API key only — model/voice/base_url are set via selectors).
     reconcile(
-        &state,
+        state,
         &settings.tts.api_key,
         |st| &st.qt_tts_api_key_input,
         |st| &mut st.quick_translate.tts.api_key,
@@ -503,7 +503,7 @@ fn reconcile(
     cx: &mut gpui::App,
     _is_target_lang: bool,
 ) {
-    let Some(input) = slot(&state.read(cx)).clone() else {
+    let Some(input) = slot(state.read(cx)).clone() else {
         return;
     };
     let current = input.read(cx).value().to_string();
@@ -721,7 +721,7 @@ fn tts_voice_selector(
     if let Some(idx) = active {
         let preset = &qt_catalog::TTS_PRESETS[idx];
         let current = settings.tts.voice.as_str();
-        let in_list = preset.voices.iter().any(|v| *v == current);
+        let in_list = preset.voices.contains(&current);
 
         for voice in preset.voices {
             let selected = *voice == current;
@@ -760,13 +760,13 @@ fn tts_voice_selector(
 fn target_lang_selector(
     settings: &mdict_rs::settings::QuickTranslateSettings,
     state: Entity<DictState>,
-    window: &mut Window,
+    _window: &mut Window,
     cx: &mut gpui::App,
 ) -> gpui::AnyElement {
     use crate::components::qt_catalog;
 
     let current = settings.target_lang.as_str();
-    let in_list = qt_catalog::TARGET_LANGS.iter().any(|l| *l == current);
+    let in_list = qt_catalog::TARGET_LANGS.contains(&current);
 
     let mut buttons = h_flex().gap(px(6.)).flex_wrap();
     for lang in qt_catalog::TARGET_LANGS {
@@ -790,9 +790,7 @@ fn target_lang_selector(
         move |cx| {
             // Switch to a blank custom value if currently on a known language.
             s.update(cx, |st, cx| {
-                if qt_catalog::TARGET_LANGS
-                    .iter()
-                    .any(|l| *l == st.quick_translate.target_lang.as_str())
+                if qt_catalog::TARGET_LANGS.contains(&st.quick_translate.target_lang.as_str())
                     || st.quick_translate.target_lang.is_empty()
                 {
                     st.quick_translate.target_lang = String::new();

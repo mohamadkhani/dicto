@@ -93,6 +93,7 @@ pub fn read_selected_text() -> Result<(String, SelectionSource), SelectionError>
 }
 
 /// Returns true if the text looks like a single word (no whitespace, not too long).
+#[allow(dead_code)]
 pub fn is_single_word(text: &str) -> bool {
     let trimmed = text.trim();
     !trimmed.is_empty() && trimmed.len() <= 100 && !trimmed.contains(char::is_whitespace)

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument, warn};
 
-use crate::{MAX_TEXT_LENGTH, TranslateError, Translator, TranslationRequest, TranslationResult};
+use crate::{MAX_TEXT_LENGTH, TranslateError, TranslationRequest, TranslationResult, Translator};
 
 /// Default OpenAI model.
 pub const DEFAULT_MODEL: &str = "gpt-4o-mini";
@@ -167,10 +167,7 @@ impl Translator for OpenaiTranslator {
             ],
         };
 
-        let url = format!(
-            "{}/chat/completions",
-            self.base_url.trim_end_matches('/')
-        );
+        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         debug!(url = %url, "sending OpenAI-compatible translation request");
 
         let mut req = self
@@ -201,9 +198,9 @@ impl Translator for OpenaiTranslator {
             )));
         }
 
-        let parsed: ChatResponse = response.json().map_err(|e| {
-            TranslateError::Parse(format!("failed to parse OpenAI response: {e}"))
-        })?;
+        let parsed: ChatResponse = response
+            .json()
+            .map_err(|e| TranslateError::Parse(format!("failed to parse OpenAI response: {e}")))?;
 
         let translated_text = parsed
             .choices
@@ -272,9 +269,7 @@ mod tests {
 
     #[test]
     fn test_is_configured_requires_base_url() {
-        let t = OpenaiTranslator::builder()
-            .api_key("test".into())
-            .build();
+        let t = OpenaiTranslator::builder().api_key("test".into()).build();
         // No base_url set → falls back to default → configured
         assert!(t.is_configured());
 

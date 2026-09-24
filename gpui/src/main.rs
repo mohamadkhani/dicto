@@ -296,7 +296,7 @@ fn poll_tray_actions(
             while let Ok(action) = tray_rx.try_recv() {
                 match action {
                     TrayAction::Show => {
-                        let _ = cx.update(|cx| {
+                        cx.update(|cx| {
                             if cx.windows().is_empty() {
                                 open_dictionary_window(cx);
                             } else {
@@ -314,7 +314,7 @@ fn poll_tray_actions(
                         TRAY_TRANSLATE_TRIGGERED.store(true, Ordering::Release);
                     }
                     TrayAction::Quit => {
-                        let _ = cx.update(|cx| cx.quit());
+                        cx.update(|cx| cx.quit());
                     }
                 }
             }
@@ -376,10 +376,10 @@ fn open_dictionary_window(cx: &mut App) {
                     // reopen a fresh one on the next poll tick — the popup
                     // state (and its new selection) must survive.
                     let replace_pending = s.qt_replace_pending;
-                    if let Some(engine) = s.quick_translate_engine.as_mut() {
-                        if !replace_pending {
-                            engine.hide_popup();
-                        }
+                    if let Some(engine) = s.quick_translate_engine.as_mut()
+                        && !replace_pending
+                    {
+                        engine.hide_popup();
                     }
                     // The popup window is gone (e.g. closed by the window
                     // manager) — stop speaking the source/translation

@@ -22,8 +22,8 @@ use crate::{
 };
 use gpui::{
     AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
-    div, px,
+    ParentElement, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
+    px,
 };
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{h_flex, v_flex};
@@ -167,6 +167,7 @@ pub enum PopupState {
     /// Loading the translation.
     Loading { original: String },
     /// Translation succeeded.
+    #[allow(dead_code)]
     Ready {
         original: String,
         translation: String,
@@ -324,9 +325,7 @@ pub fn translate_popup(state_entity: &Entity<DictState>, props: PopupProps) -> g
                 // press on it must complete as a click, not a window move.
                 .child(
                     div()
-                        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
-                            cx.stop_propagation()
-                        })
+                        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(close_button(on_close)),
                 ),
         );
@@ -627,15 +626,14 @@ impl TranslatePopupView {
                         };
                         if settled {
                             view.unsettled_ticks = 0;
-                            if let Some(desired) = view.measure.desired_window_height() {
-                                if view
+                            if let Some(desired) = view.measure.desired_window_height()
+                                && view
                                     .applied_height
                                     .is_none_or(|applied| (applied - desired).abs() > 0.5)
-                                {
-                                    window.resize(gpui::size(px(460.), px(desired)));
-                                    view.applied_height = Some(desired);
-                                    view.unsettled_ticks = 1;
-                                }
+                            {
+                                window.resize(gpui::size(px(460.), px(desired)));
+                                view.applied_height = Some(desired);
+                                view.unsettled_ticks = 1;
                             }
                         } else {
                             // Give the compositor a few ticks to apply the
@@ -803,9 +801,9 @@ impl Render for TranslatePopupView {
                     on_toggle_options: Box::new(
                         cx.listener(|this, _ev, window, cx| this.toggle_options(window, cx)),
                     ),
-                    on_close: Box::new(cx.listener(|this, _ev, window, cx| {
-                        close_popup(&this.state, window, cx)
-                    })),
+                    on_close: Box::new(
+                        cx.listener(|this, _ev, window, cx| close_popup(&this.state, window, cx)),
+                    ),
                 };
                 translate_popup(&self.state, props)
             }

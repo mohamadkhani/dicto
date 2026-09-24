@@ -84,7 +84,7 @@ impl GlobalHotkeyBackend {
                 .as_ref()
                 .ok_or_else(|| HotkeyError::Unavailable("manager has been dropped".into()))?;
             manager
-                .register(hotkey.clone())
+                .register(hotkey)
                 .map_err(|e| HotkeyError::RegistrationFailed(format!("{e}")))?;
         }
 
@@ -110,7 +110,7 @@ impl GlobalHotkeyBackend {
             {
                 let manager = self.manager.lock().unwrap();
                 if let Some(manager) = manager.as_ref() {
-                    let _ = manager.unregister_all(&[hotkey.clone()]);
+                    let _ = manager.unregister_all(&[*hotkey]);
                 }
             }
             #[cfg(target_os = "windows")]
@@ -135,7 +135,7 @@ impl HotkeyManager for GlobalHotkeyBackend {
         let parsed = keys::parse_hotkey(hotkey)?;
         let hotkey_obj = HotKey::new(Some(parsed.modifiers), parsed.key);
 
-        self.register_hotkey(hotkey_obj.clone())?;
+        self.register_hotkey(hotkey_obj)?;
 
         // Events carry the registered HotKey's numeric id — map it back to
         // the logical name the engine polls for.
@@ -231,10 +231,10 @@ fn ensure_event_listener() {
                                     .find(|(id, _)| *id == event.id)
                                     .map(|(_, name)| name.clone())
                             });
-                            if let Some(name) = name {
-                                if let Ok(mut pending) = PENDING_EVENTS.lock() {
-                                    pending.push(name);
-                                }
+                            if let Some(name) = name
+                                && let Ok(mut pending) = PENDING_EVENTS.lock()
+                            {
+                                pending.push(name);
                             }
                         }
                         Err(e) => {

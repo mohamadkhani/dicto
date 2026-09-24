@@ -521,10 +521,10 @@ pub fn apply_save(state: &Entity<DictState>, cx: &mut gpui::App) {
     executor
         .spawn(async move {
             for path in mdx {
-                if let Some(dict) = mdict_rs::formats::detect(&path) {
-                    if let Err(e) = dict.build_index(false) {
-                        warn!("reindex failed for {path}: {e}");
-                    }
+                if let Some(dict) = mdict_rs::formats::detect(&path)
+                    && let Err(e) = dict.build_index(false)
+                {
+                    warn!("reindex failed for {path}: {e}");
                 }
             }
             mdict_rs::registry::reload();

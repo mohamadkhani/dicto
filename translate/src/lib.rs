@@ -104,7 +104,9 @@ pub fn translator_from_settings(
     match provider {
         LlmProvider::Anthropic => {
             if api_key.is_empty() {
-                tracing::debug!("translate: Anthropic selected but no API key, using NullTranslator");
+                tracing::debug!(
+                    "translate: Anthropic selected but no API key, using NullTranslator"
+                );
                 return Box::new(NullTranslator);
             }
             let client = anthropic::AnthropicTranslator::builder()

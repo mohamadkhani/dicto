@@ -18,6 +18,7 @@ use tracing::warn;
 #[derive(Debug, Error)]
 pub enum HotkeyError {
     #[error("hotkey already registered: {0}")]
+    #[allow(dead_code)]
     AlreadyRegistered(String),
     #[error("invalid hotkey string: {0}")]
     InvalidHotkey(String),
@@ -41,6 +42,7 @@ pub trait HotkeyManager: Send + Sync {
     fn register(&self, id: &str, hotkey: &str) -> Result<(), HotkeyError>;
 
     /// Unregister a previously registered hotkey.
+    #[allow(dead_code)]
     fn unregister(&self, id: &str) -> Result<(), HotkeyError>;
 
     /// Try to receive the next hotkey event without blocking.

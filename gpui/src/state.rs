@@ -116,8 +116,11 @@ pub struct DictState {
     pub qt_target_lang_input: Option<gpui::Entity<gpui_component::input::InputState>>,
     /// TTS settings input fields (lazily created, same pattern as above).
     pub qt_tts_api_key_input: Option<gpui::Entity<gpui_component::input::InputState>>,
+    #[allow(dead_code)]
     pub qt_tts_base_url_input: Option<gpui::Entity<gpui_component::input::InputState>>,
+    #[allow(dead_code)]
     pub qt_tts_model_input: Option<gpui::Entity<gpui_component::input::InputState>>,
+    #[allow(dead_code)]
     pub qt_tts_voice_input: Option<gpui::Entity<gpui_component::input::InputState>>,
     /// True once we've seeded the input states from loaded settings, so we
     /// don't clobber the user's in-progress edits on every re-render.

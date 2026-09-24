@@ -44,7 +44,7 @@ async fn run(state: Entity<DictState>, cx: &mut AsyncApp) {
         return;
     }
 
-    let _ = cx.update(|app| {
+    cx.update(|app| {
         app.update_entity(&state, |s, cx| {
             s.indexing_total = total;
             s.indexing_done = 0;
@@ -54,7 +54,7 @@ async fn run(state: Entity<DictState>, cx: &mut AsyncApp) {
     });
 
     for (i, (path, name)) in pending.into_iter().enumerate() {
-        let _ = cx.update(|app| {
+        cx.update(|app| {
             app.update_entity(&state, |s, cx| {
                 s.indexing_current = Some(name.clone());
                 cx.notify();
@@ -84,7 +84,7 @@ async fn run(state: Entity<DictState>, cx: &mut AsyncApp) {
         mdict_rs::registry::reload();
         load_stylesheets();
 
-        let _ = cx.update(|app| {
+        cx.update(|app| {
             app.update_entity(&state, |s, cx| {
                 s.indexing_done = i + 1;
                 cx.notify();
@@ -92,7 +92,7 @@ async fn run(state: Entity<DictState>, cx: &mut AsyncApp) {
         });
     }
 
-    let _ = cx.update(|app| {
+    cx.update(|app| {
         app.update_entity(&state, |s, cx| {
             s.indexing_total = 0;
             s.indexing_done = 0;
@@ -139,8 +139,7 @@ pub fn load_stylesheets() {
                 .flatten()
                 .map(|e| e.path())
                 .filter(|p| {
-                    p.extension()
-                        .map_or(false, |e| e.eq_ignore_ascii_case("css"))
+                    p.extension().is_some_and(|e| e.eq_ignore_ascii_case("css"))
                         && css_belongs_to(p, stem)
                 })
                 .collect();

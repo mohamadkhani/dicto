@@ -1,4 +1,4 @@
-use crate::{TranslateError, Translator, TranslationRequest, TranslationResult};
+use crate::{TranslateError, TranslationRequest, TranslationResult, Translator};
 
 /// No-op translator used when translation is disabled or not configured.
 ///

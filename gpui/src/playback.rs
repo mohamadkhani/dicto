@@ -17,9 +17,10 @@ use mdict_rs::settings::TtsSettings;
 use rodio::Source;
 
 /// Observable playback state for one clip.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub enum PlaybackState {
     /// Nothing loaded yet.
+    #[default]
     Idle,
     /// Synthesizing / decoding audio (HTTP fetch for AI TTS, or a platform
     /// subprocess). The Speak button renders a spinner in this state.
@@ -33,13 +34,8 @@ pub enum PlaybackState {
     /// visible (seek bar full, ▶ + ↺) instead of dropping back to Idle.
     Ended { pos: f32 },
     /// Fetch or decode failed.
+    #[allow(dead_code)]
     Error(String),
-}
-
-impl Default for PlaybackState {
-    fn default() -> Self {
-        PlaybackState::Idle
-    }
 }
 
 /// One frame's view of a playback slot: state + total duration + the text the
@@ -56,6 +52,7 @@ pub fn tts_key(tts: &TtsSettings) -> String {
 }
 
 impl PlaybackState {
+    #[allow(dead_code)]
     pub fn is_loading(&self) -> bool {
         matches!(self, PlaybackState::Loading)
     }
@@ -307,30 +304,30 @@ impl PlaybackController {
     /// source was consumed, restart from bytes then seek to the target.
     pub fn seek(&self, fraction: f32) {
         let clip_guard = self.clip.lock().unwrap();
-        if let Some(clip) = clip_guard.as_ref() {
-            if let Some(total) = clip.total {
-                let target = total.mul_f32(fraction.clamp(0.0, 1.0));
-                let seek_result = if clip.sink.empty() {
-                    let _ = Self::restart_clip(clip);
-                    clip.sink.try_seek(target)
-                } else {
-                    clip.sink.try_seek(target)
-                };
-                if let Err(e) = &seek_result {
-                    tracing::warn!(error = ?e, fraction, target_secs = target.as_secs_f32(), "tts: try_seek failed");
-                }
-                // After a successful seek, ensure the sink is playing (a seek
-                // on a paused sink leaves it paused, which is fine — but if the
-                // clip was Ended we restarted and should be playing).
-                let pos = clip.sink.get_pos().as_secs_f32();
-                drop(clip_guard);
-                let playing = matches!(*self.state.lock().unwrap(), PlaybackState::Playing { .. });
-                self.set_state(if playing {
-                    PlaybackState::Playing { pos }
-                } else {
-                    PlaybackState::Paused { pos }
-                });
+        if let Some(clip) = clip_guard.as_ref()
+            && let Some(total) = clip.total
+        {
+            let target = total.mul_f32(fraction.clamp(0.0, 1.0));
+            let seek_result = if clip.sink.empty() {
+                let _ = Self::restart_clip(clip);
+                clip.sink.try_seek(target)
+            } else {
+                clip.sink.try_seek(target)
+            };
+            if let Err(e) = &seek_result {
+                tracing::warn!(error = ?e, fraction, target_secs = target.as_secs_f32(), "tts: try_seek failed");
             }
+            // After a successful seek, ensure the sink is playing (a seek
+            // on a paused sink leaves it paused, which is fine — but if the
+            // clip was Ended we restarted and should be playing).
+            let pos = clip.sink.get_pos().as_secs_f32();
+            drop(clip_guard);
+            let playing = matches!(*self.state.lock().unwrap(), PlaybackState::Playing { .. });
+            self.set_state(if playing {
+                PlaybackState::Playing { pos }
+            } else {
+                PlaybackState::Paused { pos }
+            });
         }
     }
 
@@ -363,7 +360,7 @@ impl PlaybackController {
             let current_text = self.current_text.lock().unwrap();
             let current_tts = self.current_tts.lock().unwrap();
             !current_text.is_empty()
-                && (text.is_some_and(|t| &*current_text != t)
+                && (text.is_some_and(|t| *current_text != t)
                     || tts_key.is_some_and(|k| current_tts.as_deref() != Some(k)))
         };
         if !stale {
@@ -408,7 +405,7 @@ impl PlaybackController {
         // Only demote Playing → Ended once playback has actually advanced past
         // ~150 ms. Below that, `empty` is the start-up / re-seek gap and the
         // sink is just priming.
-        let advanced = total.map(|t| pos > 0.15).unwrap_or(pos > 0.15);
+        let advanced = total.map(|_t| pos > 0.15).unwrap_or(pos > 0.15);
         if empty && advanced && matches!(*state, PlaybackState::Playing { .. }) {
             let end = total.map(|d| d.as_secs_f32()).unwrap_or(pos);
             *state = PlaybackState::Ended { pos: end };

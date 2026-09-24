@@ -240,13 +240,11 @@ impl DictApp {
                         Some(crate::quick_translate::PopupStatus::Visible(_))
                     )
                 });
-                let has_window =
-                    cx.read_entity(&poll_state, |s, _cx| s.qt_popup_window.is_some());
+                let has_window = cx.read_entity(&poll_state, |s, _cx| s.qt_popup_window.is_some());
                 // True while a tokenless re-trigger has closed the window and
                 // is waiting for its reopen tick (the window-closed observer
                 // hides the engine otherwise).
-                let replace_pending = cx
-                    .read_entity(&poll_state, |s, _cx| s.qt_replace_pending);
+                let replace_pending = cx.read_entity(&poll_state, |s, _cx| s.qt_replace_pending);
                 let wants_popup = popup_visible || replace_pending;
 
                 let mut replaced_this_tick = false;
@@ -257,7 +255,9 @@ impl DictApp {
                 // the activate branch would swallow the whole trigger.
                 let tray_token = crate::take_tray_translate_token();
                 tracing::debug!(
-                    triggered, popup_visible, has_window,
+                    triggered,
+                    popup_visible,
+                    has_window,
                     tray_token = tray_token.is_some(),
                     "qt poll tick"
                 );
@@ -277,9 +277,7 @@ impl DictApp {
                 }
 
                 if wants_popup && !replaced_this_tick && !has_window {
-                    let res = cx.update(|cx: &mut gpui::App| {
-                        open_translate_popup(&poll_state, cx)
-                    });
+                    let res = cx.update(|cx: &mut gpui::App| open_translate_popup(&poll_state, cx));
                     if let Err(e) = res {
                         tracing::error!(error = %e, "failed to open translate popup");
                     }

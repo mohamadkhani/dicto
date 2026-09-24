@@ -6,6 +6,7 @@ pub const CATALOG_URL: &str = "https://dicto-files.logicamp.dev/catalog.json";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct DictCatalog {
+    #[allow(dead_code)]
     pub version: u32,
     pub base_url: String,
     pub dictionaries: Vec<DictCatalogEntry>,
@@ -22,9 +23,11 @@ pub struct DictCatalogEntry {
     pub lang_to: String,
     pub license: String,
     #[serde(default)]
+    #[allow(dead_code)]
     pub license_url: String,
     pub files: Vec<CatalogFile>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub tags: Vec<String>,
 }
 
@@ -130,18 +133,14 @@ pub fn cache_path() -> PathBuf {
 
 pub fn fetch_catalog() -> anyhow::Result<DictCatalog> {
     let cached = cache_path();
-    if cached.exists() {
-        if let Ok(meta) = std::fs::metadata(&cached) {
-            if let Ok(modified) = meta.modified() {
-                if modified.elapsed().unwrap_or_default().as_secs() < 24 * 3600 {
-                    if let Ok(text) = std::fs::read_to_string(&cached) {
-                        if let Ok(catalog) = serde_json::from_str::<DictCatalog>(&text) {
-                            return Ok(catalog);
-                        }
-                    }
-                }
-            }
-        }
+    if cached.exists()
+        && let Ok(meta) = std::fs::metadata(&cached)
+        && let Ok(modified) = meta.modified()
+        && modified.elapsed().unwrap_or_default().as_secs() < 24 * 3600
+        && let Ok(text) = std::fs::read_to_string(&cached)
+        && let Ok(catalog) = serde_json::from_str::<DictCatalog>(&text)
+    {
+        return Ok(catalog);
     }
 
     let client = reqwest::blocking::Client::builder()
