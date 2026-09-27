@@ -1,7 +1,10 @@
 //! Audio playback controller for TTS clips.
 //!
-//! Owns a persistent `rodio` output stream and the current clip's `Sink`, so the
-//! UI can pause/resume, seek, and replay without re-synthesizing. Playback state
+//! Owns the current clip's `rodio` output stream and the clip's `Sink`, so the
+//! UI can pause/resume, seek, and replay without re-synthesizing. The stream is
+//! reopened for each new clip so playback follows the system's current default
+//! output device (a stream stays pinned to the device it was opened on).
+//! Playback state
 //! (`Idle`/`Loading`/`Playing`/`Paused`/`Error`) is observable by the popup so the
 //! Speak button shows a spinner while fetching, and the controls (play/pause,
 //! replay, seek bar) reflect the live position.
@@ -71,8 +74,11 @@ struct Clip {
     bytes: Vec<u8>,
 }
 
-/// The audio backend. Lazily created on first `load` so apps that never use
-/// TTS don't open an audio device.
+/// The audio backend. Reopened for each new clip (see `install_clip`): a
+/// `rodio` stream is bound to the default device at open time and never
+/// follows a later default-device switch, so caching it across clips would
+/// keep playing through a stale device. The stream stays alive for the
+/// clip's lifetime so pause/resume/seek keep working.
 struct Backend {
     _stream: rodio::OutputStream,
     handle: rodio::OutputStreamHandle,
@@ -82,7 +88,8 @@ struct Backend {
 /// controller is stored in `DictState` (which GPUI accesses from `&self`) and
 /// the audio thread + background tasks mutate them.
 pub struct PlaybackController {
-    /// The rodio output stream + handle. `None` until the first clip loads.
+    /// The rodio output stream + handle, replaced on every new clip so a
+    /// device switch is picked up. `None` until the first clip loads.
     backend: Mutex<Option<Backend>>,
     /// The currently loaded clip's sink + duration. `None` when idle/error.
     clip: Mutex<Option<Clip>>,
@@ -182,19 +189,20 @@ impl PlaybackController {
     /// Decode `bytes` and append to a fresh sink. Computes total duration for
     /// the seek bar. Sets state to Playing on success.
     fn install_clip(&self, bytes: Vec<u8>) -> anyhow::Result<()> {
-        // Lazily create the audio backend on first use.
+        // Open a fresh output stream for this clip, replacing any previous
+        // one. A stream is pinned to the default device at open time, so
+        // reopening per clip is what lets playback follow the system's
+        // current default device (speaker → headphones, etc.).
         let mut backend_guard = self.backend.lock().unwrap();
-        if backend_guard.is_none() {
-            let (stream, handle) = rodio::OutputStream::try_default()
-                .map_err(|e| anyhow::anyhow!("no audio device: {e}"))?;
-            *backend_guard = Some(Backend {
-                _stream: stream,
-                handle,
-            });
-        }
+        let (stream, handle) = rodio::OutputStream::try_default()
+            .map_err(|e| anyhow::anyhow!("no audio device: {e}"))?;
+        *backend_guard = Some(Backend {
+            _stream: stream,
+            handle,
+        });
         let handle = backend_guard
             .as_ref()
-            .expect("backend just initialized")
+            .expect("backend just set")
             .handle
             .clone();
         drop(backend_guard);
