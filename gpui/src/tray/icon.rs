@@ -31,7 +31,7 @@ pub fn argb() -> Vec<u8> {
 #[cfg(any(target_os = "linux", test))]
 fn to_argb32(rgba: &[u8]) -> Vec<u8> {
     let mut data = rgba.to_vec();
-    for pixel in data.chunks_exact_mut(4) {
+    for pixel in data.as_chunks_mut::<4>().0 {
         pixel.rotate_right(1); // RGBA → ARGB32
     }
     data
@@ -61,7 +61,7 @@ mod tests {
 
         // The card is scaled to fill the canvas (height-limited), so the
         // opaque area covers most of it.
-        let opaque = data.chunks_exact(4).filter(|p| p[0] > 0).count();
+        let opaque = data.as_chunks::<4>().0.iter().filter(|p| p[0] > 0).count();
         let frac = opaque as f32 / (SIZE * SIZE) as f32;
         assert!(
             frac > 0.5,
@@ -71,7 +71,9 @@ mod tests {
 
         // The "A" mark renders as near-black (#1a1b26) on the card.
         let dark = data
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[0] == 255 && p[1] < 0x40 && p[2] < 0x40 && p[3] < 0x40)
             .count();
         assert!(dark > 10, "no dark 'A' mark rendered");
