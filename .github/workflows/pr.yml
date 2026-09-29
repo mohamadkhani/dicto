@@ -101,6 +101,7 @@ jobs:
           sed -i "s/^pkgver=.*/pkgver=${VERSION}/" /pkgbuild/PKGBUILD
           sed -i 's|source=(.*)|source=("$pkgname-$pkgver.tar.gz")|' /pkgbuild/PKGBUILD
           sed -i "s/'PLACEHOLDER'/'SKIP'/" /pkgbuild/PKGBUILD
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git archive --format=tar.gz -o "/pkgbuild/dicto-${VERSION}.tar.gz" HEAD
           useradd -m builder
           chown -R builder:builder /pkgbuild
