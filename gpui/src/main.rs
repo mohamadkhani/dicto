@@ -1,5 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
+#[cfg(target_os = "linux")]
+mod alsa_default;
 mod app;
 mod audio;
 mod bidi;
@@ -221,6 +223,12 @@ fn main() {
         .with(filter)
         .with(tracing_subscriber::fmt::layer())
         .init();
+
+    // Must run before the first audio device open (see module docs): makes
+    // ALSA's `default` PCM follow the desktop's default output device even
+    // on systems whose ALSA plugin configs are missing from the load path.
+    #[cfg(target_os = "linux")]
+    alsa_default::ensure_server_routed_default();
 
     // Load any indexes that already exist so the UI is usable immediately
     // for cached dictionaries. New/unindexed dicts are built in the background
