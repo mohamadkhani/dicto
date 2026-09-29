@@ -89,7 +89,7 @@ jobs:
       - name: Install dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel git rust cargo gtk3 alsa-lib libxkbcommon libxkbcommon-x11 xdotool hicolor-icon-theme namcap sudo
+          pacman -S --noconfirm base-devel git rust cargo clang gtk3 alsa-lib libxkbcommon libxkbcommon-x11 xdotool hicolor-icon-theme namcap sudo
 
       - uses: actions/checkout@v4
 
