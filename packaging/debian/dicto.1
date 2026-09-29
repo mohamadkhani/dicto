@@ -1,0 +1,30 @@
+.TH DICTO 1 "September 2026" "dicto 0.6" "User Commands"
+.SH NAME
+dicto \- fast, offline desktop dictionary for MDX/MDD files
+.SH SYNOPSIS
+.B dicto
+.RI [ options ]
+.SH DESCRIPTION
+.B dicto
+is a native desktop dictionary application that reads MDX/MDD
+dictionary files \(em the format used by GoldenDict and MDict.
+It provides instant search as you type, faithful HTML rendering with
+per-dictionary CSS, multi-dictionary management (enable, disable, and
+reorder without restarting), and a built-in dictionary downloader.
+It works fully offline.
+.SH OPTIONS
+.TP
+.BR \-t ", " \-\-translate
+Start in quick-translate mode.
+.SH FILES
+.TP
+.I ~/.config/dicto/dicts/
+Dictionary directory. Place
+.I .mdx
+(and optional
+.IR .mdd )
+files here; they are discovered and indexed automatically on the next
+launch. Dictionaries downloaded from within the app are installed
+here too.
+.SH HOMEPAGE
+https://github.com/logi-camp/dicto
