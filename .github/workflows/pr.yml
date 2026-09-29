@@ -1,7 +1,9 @@
-name: PR Test Build
+name: Test Build
 
 on:
   pull_request:
+  push:
+    branches: ["**"]
   workflow_dispatch:  # Manual run without a PR
 
 concurrency:
@@ -30,14 +32,29 @@ jobs:
       - name: Install dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel git gtk3 alsa-lib libxkbcommon libxkbcommon-x11 xdotool clang pkgconf upx
+          pacman -S --noconfirm base-devel git gtk3 alsa-lib libxkbcommon libxkbcommon-x11 xdotool clang pkgconf upx dpkg
 
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # CI-test version: sorts BELOW the real release (0.6.2~abc1234 < 0.6.2),
+      # so installing the tagged package over a test one upgrades cleanly.
+      - name: Derive version
+        id: version
+        run: |
+          VERSION="$(grep -m1 '^version' gpui/Cargo.toml | sed 's/.*"\(.*\)"/\1/')~${GITHUB_SHA::7}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Build
         run: cargo build --release --package dicto
+
+      # Built from the UNPACKED binary (UPX would hide ELF dependency data);
+      # build-deb.sh strips its own staged copy.
+      - name: Package Debian / Ubuntu (.deb)
+        run: |
+          packaging/debian/build-deb.sh "${{ steps.version.outputs.version }}" \
+            target/release/dicto dist amd64
 
       - name: Compress binary with UPX
         run: upx --best --lzma target/release/dicto
@@ -56,7 +73,46 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: dicto-pr${{ env.PR_ID }}-linux
-          path: dicto-*.tar.gz
+          path: |
+            dicto-*.tar.gz
+            dist/*.deb
+
+  # Builds the real AUR PKGBUILD with makepkg against a local tarball of the
+  # branch checkout (the release PKGBUILD points at the tag tarball, which
+  # does not exist for branches) and lints the built package with namcap.
+  # Pacman's rust/cargo satisfy the PKGBUILD makedepends; makepkg refuses to
+  # run as root, so the build runs as an unprivileged user.
+  build-arch:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm base-devel git rust cargo gtk3 alsa-lib libxkbcommon libxkbcommon-x11 xdotool hicolor-icon-theme namcap sudo
+
+      - uses: actions/checkout@v4
+
+      - name: Build Arch package
+        run: |
+          VERSION="$(grep -m1 '^version' gpui/Cargo.toml | sed 's/.*"\(.*\)"/\1/')"
+          mkdir -p /pkgbuild
+          cp packaging/arch/dicto/PKGBUILD /pkgbuild/PKGBUILD
+          sed -i "s/^pkgver=.*/pkgver=${VERSION}/" /pkgbuild/PKGBUILD
+          sed -i 's|source=(.*)|source=("$pkgname-$pkgver.tar.gz")|' /pkgbuild/PKGBUILD
+          sed -i "s/'PLACEHOLDER'/'SKIP'/" /pkgbuild/PKGBUILD
+          git archive --format=tar.gz -o "/pkgbuild/dicto-${VERSION}.tar.gz" HEAD
+          useradd -m builder
+          chown -R builder:builder /pkgbuild
+          sudo -u builder bash -c 'cd /pkgbuild && makepkg -f --noconfirm'
+
+      - name: Lint built package with namcap
+        run: namcap /pkgbuild/dicto-*.pkg.tar.zst
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dicto-pr${{ env.PR_ID }}-arch
+          path: /pkgbuild/dicto-*.pkg.tar.zst
 
   build-windows:
     runs-on: windows-latest
