@@ -286,6 +286,26 @@ impl DictApp {
         })
         .detach();
 
+        // Probe once (GNOME Wayland only) whether the window-calls
+        // extension is available; the Quick Translate popup needs it to
+        // remember its position. Background — the probe spawns a gdbus
+        // process.
+        if crate::window_move::placement_hint_relevant() {
+            let probe_state = state.clone();
+            cx.spawn(async move |_this, cx| {
+                let available = cx
+                    .background_executor()
+                    .spawn(async { crate::window_move::extension_available() })
+                    .await;
+                tracing::info!(available, "window-calls extension probe");
+                cx.update_entity(&probe_state, |s, cx| {
+                    s.window_calls_missing = Some(!available);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+
         Self { state, input }
     }
 
@@ -350,6 +370,13 @@ impl Render for DictApp {
         // sibling of the main view ourselves.
         let dialog_layer = Root::render_dialog_layer(window, cx);
 
+        // GNOME Wayland placement hint: without the window-calls extension
+        // the Quick Translate popup cannot remember its dragged position.
+        let window_calls_hint = {
+            let s = self.state.read(cx);
+            s.window_calls_missing == Some(true) && !s.window_calls_hint_dismissed
+        };
+
         let input_handle = self.input.clone();
         let main = v_flex()
             .size_full()
@@ -368,6 +395,9 @@ impl Render for DictApp {
                             .child("Dicto"),
                     ),
             )
+            .children(window_calls_hint.then(|| {
+                window_calls_banner(&self.state, cx)
+            }))
             // Search row hosts the cog on its right edge so the button
             // sits outside the title bar's OS-claimed drag region.
             .child(search_bar::search_bar(
@@ -446,8 +476,23 @@ fn open_translate_popup(state: &Entity<DictState>, cx: &mut gpui::App) -> anyhow
             Some(crate::quick_translate::PopupStatus::Visible(popup_state)) => Some(popup_state),
             _ => None,
         });
-    let bounds = Bounds::centered(None, size(px(460.), px(initial_height)), cx);
+    let mut bounds = Bounds::centered(None, size(px(460.), px(initial_height)), cx);
+    // Reopen where the user last dragged the popup — but only if that spot
+    // still lies on a connected display (a monitor unplug would otherwise
+    // park the window off-screen). Only X11 honors a requested origin; on
+    // Wayland the compositor ignores it and window_move::move_popup_async()
+    // repositions through the GNOME Shell helper extension instead.
+    if let Some(origin) = state.read(cx).qt_popup_pos
+        && cx.displays().iter().any(|d| d.bounds().contains(&origin))
+    {
+        bounds.origin = origin;
+    }
     let state_for_window = state.clone();
+
+    // With a saved position pending, the popup renders nothing until
+    // window_move lands it there — otherwise it would flash at the
+    // compositor's default spot first.
+    crate::window_move::begin_popup_placement(crate::window_move::saved_pos().is_some());
 
     let handle = cx.open_window(
         WindowOptions {
@@ -498,6 +543,13 @@ fn open_translate_popup(state: &Entity<DictState>, cx: &mut gpui::App) -> anyhow
         s.qt_popup_window = Some(handle);
         s.qt_replace_pending = false;
     });
+
+    // Restore the last dragged position (GNOME Wayland: via the
+    // window-calls shell extension; X11's requested origin above
+    // already covers it and this call no-ops without the extension).
+    if let Some((x, y)) = crate::window_move::saved_pos() {
+        crate::window_move::move_popup_async(x, y);
+    }
     tracing::info!("translate popup: created new window");
 
     Ok(())
@@ -507,6 +559,9 @@ fn open_translate_popup(state: &Entity<DictState>, cx: &mut gpui::App) -> anyhow
 /// the poll loop reopens a fresh window on the next tick. The replace-pending
 /// flag makes the window-closed observer keep the popup state alive.
 fn close_popup_window(state: &Entity<DictState>, cx: &mut gpui::App) {
+    // Capture the popup's last position (GNOME extension) before teardown —
+    // the reopen next tick restores exactly this spot.
+    crate::window_move::save_popup_rect();
     // Flag + detach the handle BEFORE removing: the window-closed observer
     // fires inside `remove_window`'s update and must see replace_pending
     // (and no stored handle) to leave the popup state untouched.
@@ -541,6 +596,97 @@ fn activate_popup_window(state: &Entity<DictState>, token: &str, cx: &mut gpui::
         tracing::warn!("translate popup: stale window handle on activation");
         state.update(cx, |s, _cx| s.qt_popup_window = None);
     }
+}
+
+/// Startup hint shown on GNOME Wayland when the window-calls extension is
+/// missing: Quick Translate cannot remember its popup position without it.
+/// Offers a one-click link to the extension on extensions.gnome.org and a
+/// dismiss (persisted in settings.toml).
+fn window_calls_banner(state: &Entity<DictState>, cx: &Context<DictApp>) -> gpui::AnyElement {
+    const EGO_WINDOW_CALLS: &str = "https://extensions.gnome.org/extension/4724/window-calls/";
+    let dismiss_state = state.clone();
+
+    h_flex()
+        .w_full()
+        .items_center()
+        .justify_between()
+        .gap(px(8.))
+        .px(px(12.))
+        .py(px(6.))
+        .bg(colors::surface())
+        .border_b_1()
+        .border_color(colors::border())
+        .child(
+            h_flex()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(colors::update())
+                        .child("⚠"),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(colors::text_secondary())
+                        .child(SharedString::from(
+                            "Quick Translate can't remember its popup position. \
+                             Install & enable the Window Calls extension, then restart Dicto.",
+                        )),
+                ),
+        )
+        .child(
+            h_flex()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .id("wc-install")
+                        .cursor_pointer()
+                        .px(px(8.))
+                        .py(px(3.))
+                        .rounded(px(6.))
+                        .text_size(px(12.))
+                        .text_color(colors::primary())
+                        .border_1()
+                        .border_color(colors::border())
+                        .hover(|s| s.bg(colors::hover()))
+                        .child("Get Window Calls")
+                        .on_click(cx.listener(move |_this, _ev, _window, cx| {
+                            cx.open_url(EGO_WINDOW_CALLS);
+                        })),
+                )
+                .child(
+                    v_flex()
+                        .id("wc-dismiss")
+                        .cursor_pointer()
+                        .size(px(22.))
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(6.))
+                        .hover(|s| s.bg(colors::hover()))
+                        // Same Lucide X the popup's title strip uses — a
+                        // text "✕" glyph resolves to a fallback font whose
+                        // advance width leaves the ink visibly off-center.
+                        // v_flex (not plain div): centering properties need
+                        // an explicit flex container.
+                        .child(
+                            gpui::svg()
+                                .path("icons/close.svg")
+                                .self_center()
+                                .size(px(14.))
+                                .text_color(colors::text_secondary()),
+                        )
+                        .on_click(cx.listener(move |_this, _ev, _window, cx| {
+                            cx.update_entity(&dismiss_state, |s, cx| {
+                                s.window_calls_hint_dismissed = true;
+                                cx.notify();
+                            });
+                            let _ =
+                                mdict_rs::settings::set_window_calls_hint_dismissed(true);
+                        })),
+                ),
+        )
+        .into_any_element()
 }
 
 /// Slim progress bar shown while background indexing is running.

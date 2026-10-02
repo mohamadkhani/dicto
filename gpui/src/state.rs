@@ -136,6 +136,21 @@ pub struct DictState {
     /// window-closed observer must NOT hide the popup engine for this
     /// programmatic close (the poll loop reopens the window next tick).
     pub qt_replace_pending: bool,
+    /// Last user-chosen Quick Translate popup position (window origin),
+    /// recorded by the popup's bounds observer while the user drags it.
+    /// The next popup opens here instead of screen-center. X11 only in
+    /// practice: Wayland compositors never report window moves, so there
+    /// the restore goes through `window_move` and the GNOME Shell
+    /// extension instead. Session-scoped: `None` until the user moves the
+    /// popup once.
+    pub qt_popup_pos: Option<gpui::Point<gpui::Pixels>>,
+
+    /// GNOME window-calls extension probe (popup placement on Wayland).
+    /// `None` while the startup probe is still running; `Some(true)` means
+    /// the extension is missing/disabled and the hint banner should show.
+    pub window_calls_missing: Option<bool>,
+    /// User dismissed the window-calls hint (persisted in settings.toml).
+    pub window_calls_hint_dismissed: bool,
 }
 
 impl DictState {
@@ -185,6 +200,13 @@ impl DictState {
             qt_inputs_seeded: false,
             qt_popup_window: None,
             qt_replace_pending: false,
+            qt_popup_pos: None,
+            window_calls_missing: if crate::window_move::placement_hint_relevant() {
+                None
+            } else {
+                Some(false)
+            },
+            window_calls_hint_dismissed: settings.window_calls_hint_dismissed,
             playback_source: crate::playback::PlaybackController::default(),
             playback_translation: crate::playback::PlaybackController::default(),
         }

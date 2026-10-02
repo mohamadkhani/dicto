@@ -18,6 +18,7 @@ mod selection;
 mod state;
 mod tray;
 mod tts;
+mod window_move;
 #[cfg(target_os = "windows")]
 mod win32;
 

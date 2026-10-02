@@ -222,11 +222,28 @@ The popup is its own GPUI window holding a `TranslatePopupView`
 ([gpui/src/components/translate_popup.rs:874](../gpui/src/components/translate_popup.rs#L874)).
 
 - **Open:** `open_translate_popup`
-  ([gpui/src/app.rs:362](../gpui/src/app.rs#L362)) — if a window already exists,
-  it activates it; otherwise it opens a centered 460×560 window
+  ([gpui/src/app.rs:457](../gpui/src/app.rs#L457)) — if a window already exists,
+  it activates it; otherwise it opens a 460×(estimated-height) window
   (`WindowKind::PopUp`, `app_id: "dicto"`, `is_resizable`, client decorations)
   and stores the `WindowHandle` in `DictState::qt_popup_window`. Called when
   `trigger_translate` returns `true`.
+- **Placement:** on X11 `WindowKind::PopUp` is an override-redirect window
+  that honors the requested origin — the last user-dragged position
+  (`DictState::qt_popup_pos`, recorded by the popup view's bounds observer)
+  is passed at creation and it reopens exactly where the user left it. On
+  Wayland the same kind is a plain toplevel: compositors place it themselves
+  and never report positions back, so the app leans on the
+  `window-calls@domandoman.xyz` GNOME Shell extension via D-Bus
+  (`gpui/src/window_move.rs`): the popup's position is read right before it
+  closes (synchronously — the window dies moments later), the popup stays
+  invisible until it has been moved to the stored spot, and a short hold
+  re-applies the position if the compositor's initial placement lands late.
+  Without the extension the popup opens wherever the compositor puts it. On
+  GNOME Wayland the app probes for the extension at startup and shows a
+  dismissible banner (persisted in `settings.toml` as
+  `window_calls_hint_dismissed`) with a link to
+  <https://extensions.gnome.org/extension/4724/window-calls/> when it is
+  missing.
 - **Focus:** the view focuses itself on mount (`FocusHandle`), so it receives
   key events.
 - **Dismiss:**

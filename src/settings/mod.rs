@@ -32,6 +32,10 @@ pub struct Settings {
     /// `dicto-translate` crate both have access without circular deps.
     #[serde(default)]
     pub quick_translate: QuickTranslateSettings,
+    /// User dismissed the "install Window Calls" hint (GNOME Wayland popup
+    /// placement). Persisted so it is shown at most once per decision.
+    #[serde(default)]
+    pub window_calls_hint_dismissed: bool,
 }
 
 /// Three-state telemetry consent, persisted in settings.toml.
@@ -264,6 +268,19 @@ pub fn update_consent(consent: TelemetryConsent) -> anyhow::Result<Settings> {
     save(&current)?;
     *SETTINGS.write().unwrap() = current.clone();
     Ok(current)
+}
+
+/// Persist the "install Window Calls" hint dismissal, preserving every
+/// other field (same pattern as [`update_consent`]).
+pub fn set_window_calls_hint_dismissed(dismissed: bool) -> anyhow::Result<()> {
+    let mut current = current();
+    if current.window_calls_hint_dismissed == dismissed {
+        return Ok(());
+    }
+    current.window_calls_hint_dismissed = dismissed;
+    save(&current)?;
+    *SETTINGS.write().unwrap() = current;
+    Ok(())
 }
 
 /// Generate + persist the installation id if none exists yet. Returns the id

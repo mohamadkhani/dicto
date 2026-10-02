@@ -659,6 +659,24 @@ impl TranslatePopupView {
         let original_editor = cx.new(|cx| EditorState::new(window, cx));
         let translation_editor = cx.new(|cx| EditorState::new_read_only(window, cx));
 
+        // Track the window's position for X11 reopen-at-saved-spot: every
+        // platform move routes through `bounds_changed` there, so the last
+        // user-dragged origin is always current in DictState. (Wayland
+        // compositors never report moves — `window_move` owns restore on
+        // Wayland; the stale origin recorded here is ignored by the
+        // compositor anyway.) No notify — saving a position never changes
+        // what this frame paints.
+        let pos_state = state.clone();
+        cx.observe_window_bounds(window, move |_, window, cx| {
+            let origin = window.bounds().origin;
+            pos_state.update(cx, |s, _| {
+                if s.qt_popup_pos != Some(origin) {
+                    s.qt_popup_pos = Some(origin);
+                }
+            });
+        })
+        .detach();
+
         // Push edits from the Original editor into the engine as they happen,
         // so the Translate button / TTS / the header always see the current
         // text. set_original hides a stale translation (popup → Idle).
@@ -783,7 +801,13 @@ impl Render for TranslatePopupView {
             }
         }
         let card = match (status, settings) {
-            (Some(crate::quick_translate::PopupStatus::Visible(ps)), Some(settings)) => {
+            // With a saved position pending (GNOME Wayland), render nothing
+            // until window_move has landed the window — painting earlier
+            // would flash it at the compositor's default spot. The view's
+            // poll tick re-renders as soon as placement completes.
+            (Some(crate::quick_translate::PopupStatus::Visible(ps)), Some(settings))
+                if crate::window_move::is_placed() =>
+            {
                 // Build props first: `options_settled` reborrows `window`
                 // mutably, so the shared `window`/`cx` borrows passed to
                 // `translate_popup` must not coexist with its evaluation.
@@ -876,6 +900,9 @@ impl Render for TranslatePopupView {
 /// Hide the popup state, stop any playing TTS clips, and close the popup
 /// window. Shared by the title-strip close button and Escape.
 fn close_popup(state: &Entity<DictState>, window: &mut Window, cx: &mut gpui::App) {
+    // Ask the GNOME Shell helper for the dragged position while the window
+    // still exists; it answers from its cache, so ordering is safe.
+    crate::window_move::save_popup_rect();
     state.update(cx, |s, cx| {
         if let Some(engine) = s.quick_translate_engine.as_mut() {
             engine.hide_popup();
