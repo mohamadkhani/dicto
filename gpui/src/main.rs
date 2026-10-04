@@ -12,6 +12,7 @@ mod download;
 mod hotkey;
 mod html;
 mod indexing;
+mod karaoke;
 mod playback;
 mod quick_translate;
 mod selection;

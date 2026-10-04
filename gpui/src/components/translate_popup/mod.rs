@@ -758,9 +758,10 @@ impl Render for TranslatePopupView {
         let focus = self.focus.clone();
 
         // Read popup state + full quick-translate settings + both playback
-        // snapshots (source + translation are independent controllers) out of
-        // DictState (cloned so the borrow ends before we pass cx).
-        let (status, settings, options_open, pb_src, pb_tr) = {
+        // snapshots + their live TTS word-highlight ranges (source and
+        // translation are independent controllers) out of DictState (cloned
+        // so the borrow ends before we pass cx).
+        let (status, settings, options_open, pb_src, pb_tr, hl_src, hl_tr) = {
             let st = self.state.read(cx);
             let engine = st.quick_translate_engine.as_ref();
             (
@@ -769,6 +770,8 @@ impl Render for TranslatePopupView {
                 self.options_open,
                 st.playback_source.snapshot(),
                 st.playback_translation.snapshot(),
+                st.playback_source.highlight_range(),
+                st.playback_translation.highlight_range(),
             )
         };
         // Keep the always-editable Original editor in sync with the engine:
@@ -793,6 +796,25 @@ impl Render for TranslatePopupView {
                 self.last_shown_translation = Some(translation.clone());
                 self.translation_editor.update(cx, |s, cx| {
                     s.set_text(translation, window, cx);
+                });
+            }
+
+            // TTS word highlight: paint the word currently being spoken
+            // inside the matching editor. A range only applies while the clip
+            // text still equals the editor text — the stale-clip invalidation
+            // stops playback on a text change anyway, and this guards against
+            // byte ranges from an older edit.
+            let applies = |snap: &crate::playback::PlaybackSnapshot, shown: &str| snap.2 == shown;
+            self.original_editor.update(cx, |s, _| {
+                s.highlight = hl_src
+                    .filter(|_| applies(&pb_src, ps.original()))
+                    .filter(|r| r.end <= s.core.text.len());
+            });
+            if let PopupState::Ready { translation, .. } = ps {
+                self.translation_editor.update(cx, |s, _| {
+                    s.highlight = hl_tr
+                        .filter(|_| applies(&pb_tr, translation))
+                        .filter(|r| r.end <= s.core.text.len());
                 });
             }
         }

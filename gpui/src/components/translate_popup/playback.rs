@@ -267,6 +267,12 @@ pub(crate) fn playback_controls(
 }
 
 /// Spawn the synthesis + install pipeline on the background executor.
+///
+/// The clip text arrives pre-split into sentence chunks; they are synthesized
+/// IN ORDER, and each chunk's bytes are installed the moment they land — so
+/// playback starts after the FIRST chunk (not the whole text), while later
+/// chunks synthesize behind it. The controller rejects stale installs (a new
+/// load/close happened meanwhile) via the generation tag, which ends the loop.
 fn spawn_speak(
     slot: Slot,
     state: Entity<DictState>,
@@ -279,33 +285,42 @@ fn spawn_speak(
     let action =
         slot.controller(state.read(cx))
             .start_load(text.clone(), lang.clone(), Some(tts.clone()));
-    if let crate::playback::LoadAction::Synthesize { text, lang, tts } = action {
-        // `text` and `tts` are each needed twice: once for synthesis (moved
-        // into the bg task) and once to tag the installed clip (so replays
-        // detect text/settings changes). Clone the latter before the move.
-        let text_for_install = text.clone();
-        let tts_for_install = tts.clone();
+    if let crate::playback::LoadAction::Synthesize {
+        generation,
+        chunks,
+        lang,
+        tts,
+    } = action
+    {
         cx.spawn(async move |cx| {
-            let result =
-                cx.background_executor()
+            for (i, chunk_text) in chunks.into_iter().enumerate() {
+                let lang = lang.clone();
+                let tts = tts.clone();
+                let synthesized = cx
+                    .background_executor()
                     .spawn(async move {
-                        crate::tts::synthesize_bytes(&text, lang.as_deref(), tts.as_ref())
+                        crate::tts::synthesize_bytes(&chunk_text, lang.as_deref(), tts.as_ref())
                     })
                     .await;
-            match result {
-                Ok(bytes) => {
-                    cx.update_entity(&state, |s, _cx| {
-                        slot.controller_mut(s).install_from_bytes(
-                            text_for_install,
-                            tts_for_install,
-                            bytes,
-                        );
-                    });
-                }
-                Err(e) => {
-                    cx.update_entity(&state, |s, _cx| {
-                        slot.controller_mut(s).fail(e.to_string());
-                    });
+                match synthesized {
+                    Ok(bytes) => {
+                        // install_chunk returns false only for a stale
+                        // generation (a newer load/close happened).
+                        let accepted = cx.update_entity(&state, |s, _cx| {
+                            slot.controller_mut(s).install_chunk(generation, i, bytes)
+                        });
+                        if !accepted {
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        // `fail` surfaces the error only while nothing has
+                        // played; mid-clip it degrades to an early end.
+                        cx.update_entity(&state, |s, _cx| {
+                            slot.controller_mut(s).fail(e.to_string());
+                        });
+                        return;
+                    }
                 }
             }
         })

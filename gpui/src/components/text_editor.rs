@@ -490,6 +490,13 @@ pub(crate) struct EditorState {
     /// While dragging the overlay scrollbar: the pointer's y offset inside
     /// the thumb at grab time. `None` when not dragging.
     pub(crate) scrollbar_grab: Option<Pixels>,
+    /// Byte range of the word currently being spoken by the TTS clip (set by
+    /// the popup each poll tick from the playback controller). Painted as a
+    /// soft highlight quad; `None` when nothing is playing.
+    pub(crate) highlight: Option<Range<usize>>,
+    /// When the wheel last scrolled this editor, so the TTS-highlight
+    /// auto-follow can defer to the user for a moment after manual scrolling.
+    pub(crate) last_wheel: Option<std::time::Instant>,
 }
 
 impl EventEmitter<EditorEvent> for EditorState {}
@@ -505,6 +512,8 @@ impl EditorState {
             read_only: false,
             reveal_cursor: false,
             scrollbar_grab: None,
+            highlight: None,
+            last_wheel: None,
         }
     }
 
@@ -530,6 +539,7 @@ impl EditorState {
         };
         self.scroll_y = px(0.);
         self.reveal_cursor = false;
+        self.highlight = None;
         cx.notify();
     }
 
@@ -953,7 +963,19 @@ impl gpui::Element for TextEditorElement {
         let Some(hitbox) = prepaint.take() else {
             return;
         };
-        let (info, cursor, selection, focused, read_only, mut scroll_y, max_scroll, reveal_cursor) = {
+        let (
+            info,
+            cursor,
+            selection,
+            focused,
+            read_only,
+            mut scroll_y,
+            max_scroll,
+            reveal_cursor,
+            highlight,
+            dragging,
+            last_wheel,
+        ) = {
             let state = self.state.read(cx);
             let Some(info) = state.last_layout.clone() else {
                 return;
@@ -969,6 +991,9 @@ impl gpui::Element for TextEditorElement {
                 scroll_y,
                 max_scroll,
                 state.reveal_cursor,
+                state.highlight.clone(),
+                state.dragging,
+                state.last_wheel,
             )
         };
 
@@ -993,6 +1018,24 @@ impl gpui::Element for TextEditorElement {
             }
         }
 
+        // TTS-highlight auto-follow: while a clip is playing, keep the
+        // highlighted word's line in view — but never fight the user. The
+        // follow only applies once the wheel has been idle for a moment and
+        // no selection drag is in progress.
+        if let Some(hl) = &highlight {
+            let wheel_idle =
+                last_wheel.is_none_or(|t| t.elapsed() > std::time::Duration::from_millis(1500));
+            let idle = !dragging && wheel_idle;
+            if idle && let Some(target) = desired_scroll_y(&info, hl.start, scroll_y, max_scroll) {
+                scroll_y = target;
+                let state = self.state.clone();
+                state.update(cx, |state, cx| {
+                    state.scroll_y = target;
+                    cx.notify();
+                });
+            }
+        }
+
         let cursor_line = line_index_for_cursor(&info.lines, cursor);
         let content_mask = window.content_mask().bounds;
 
@@ -1003,6 +1046,27 @@ impl gpui::Element for TextEditorElement {
                 continue;
             }
             let text_x = info.bounds.origin.x + TEXT_INSET + line.offset;
+
+            // TTS word highlight: a soft quad behind the word currently
+            // spoken (byte range from the playback controller). Painted under
+            // the selection, same glyph-union math — correct for RTL for free.
+            if let Some(hl) = &highlight {
+                let line_end = line.byte_start + line.len;
+                let start = hl.start.max(line.byte_start);
+                let end = hl.end.min(line_end);
+                if start < end
+                    && let Some((x1, x2)) =
+                        glyph_x_range(&line.layout, start - line.byte_start, end - line.byte_start)
+                {
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            point(text_x + x1, line_top),
+                            size((x2 - x1).max(px(1.)), info.line_height),
+                        ),
+                        colors::primary().alpha(0.35),
+                    ));
+                }
+            }
 
             // Selection quad: the union of the glyphs whose byte indices fall
             // inside the selection ∩ this line.
@@ -1170,6 +1234,7 @@ impl gpui::Element for TextEditorElement {
                     let target = (state.scroll_y - dy).clamp(px(0.), max_scroll);
                     if target != state.scroll_y {
                         state.scroll_y = target;
+                        state.last_wheel = Some(std::time::Instant::now());
                         scrolled = true;
                         cx.notify();
                     }
