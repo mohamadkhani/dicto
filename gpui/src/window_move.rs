@@ -123,8 +123,22 @@ fn find_popup_winid() -> Option<u32> {
 fn popup_rect_sync() -> Option<(i32, i32)> {
     let winid = find_popup_winid()?.to_string();
     let out = gdbus("GetFrameRect", &[&winid])?;
-    let x = out.split("\"x\":").nth(1)?.split([',', '}']).next()?.trim().parse().ok()?;
-    let y = out.split("\"y\":").nth(1)?.split([',', '}']).next()?.trim().parse().ok()?;
+    let x = out
+        .split("\"x\":")
+        .nth(1)?
+        .split([',', '}'])
+        .next()?
+        .trim()
+        .parse()
+        .ok()?;
+    let y = out
+        .split("\"y\":")
+        .nth(1)?
+        .split([',', '}'])
+        .next()?
+        .trim()
+        .parse()
+        .ok()?;
     Some((x, y))
 }
 
@@ -148,7 +162,10 @@ pub fn saved_pos() -> Option<(i32, i32)> {
     if !SAVED.load(Ordering::Acquire) {
         return None;
     }
-    Some((SAVED_X.load(Ordering::Acquire) as i32, SAVED_Y.load(Ordering::Acquire) as i32))
+    Some((
+        SAVED_X.load(Ordering::Acquire) as i32,
+        SAVED_Y.load(Ordering::Acquire) as i32,
+    ))
 }
 
 /// Move the popup window to (x, y). Retries while the window is still
@@ -186,7 +203,12 @@ pub fn move_popup_async(x: i32, y: i32) {
                 continue;
             };
             if (cx - x).abs() > 1 || (cy - y).abs() > 1 {
-                if gdbus("Move", &[&winid.to_string(), &x.to_string(), &y.to_string()]).is_some() {
+                if gdbus(
+                    "Move",
+                    &[&winid.to_string(), &x.to_string(), &y.to_string()],
+                )
+                .is_some()
+                {
                     tracing::debug!(winid, x, y, "window_move: re-applied after override");
                 }
             } else {
@@ -202,7 +224,21 @@ pub fn move_popup_async(x: i32, y: i32) {
 /// Frame-rect origin of a specific window id, via the extension.
 fn popup_rect_at(winid: u32) -> Option<(i32, i32)> {
     let out = gdbus("GetFrameRect", &[&winid.to_string()])?;
-    let x = out.split("\"x\":").nth(1)?.split([',', '}']).next()?.trim().parse().ok()?;
-    let y = out.split("\"y\":").nth(1)?.split([',', '}']).next()?.trim().parse().ok()?;
+    let x = out
+        .split("\"x\":")
+        .nth(1)?
+        .split([',', '}'])
+        .next()?
+        .trim()
+        .parse()
+        .ok()?;
+    let y = out
+        .split("\"y\":")
+        .nth(1)?
+        .split([',', '}'])
+        .next()?
+        .trim()
+        .parse()
+        .ok()?;
     Some((x, y))
 }

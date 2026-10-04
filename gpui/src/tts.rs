@@ -143,6 +143,14 @@ impl AiTtsClient {
     }
 }
 
+/// Verify the AI TTS configuration by synthesizing one short clip without
+/// playing it. Returns the clip size on success. Used by the settings
+/// tab's [Test] button to catch wrong keys/URLs at configuration time.
+pub fn test_synthesis(tts: &TtsSettings) -> anyhow::Result<usize> {
+    let bytes = AiTtsClient::new(tts).synthesize("This is a test.")?;
+    Ok(bytes.len())
+}
+
 // ---------------------------------------------------------------------------
 // Platform TTS fallback
 // ---------------------------------------------------------------------------

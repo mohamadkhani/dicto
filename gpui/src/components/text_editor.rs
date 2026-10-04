@@ -1284,8 +1284,9 @@ impl gpui::Element for TextEditorElement {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use gpui::{FontId, GlyphId, ShapedGlyph, ShapedRun};
+
+    use super::*;
 
     fn make_layout(glyphs: &[(f32, usize)], width: f32, len: usize) -> Arc<LineLayout> {
         Arc::new(LineLayout {

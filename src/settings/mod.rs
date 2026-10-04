@@ -36,6 +36,10 @@ pub struct Settings {
     /// placement). Persisted so it is shown at most once per decision.
     #[serde(default)]
     pub window_calls_hint_dismissed: bool,
+    /// User dismissed the "configure Quick Translate AI" hint banner.
+    /// Persisted so it is shown at most once per decision.
+    #[serde(default)]
+    pub ai_setup_hint_dismissed: bool,
 }
 
 /// Three-state telemetry consent, persisted in settings.toml.
@@ -65,15 +69,15 @@ pub struct QuickTranslateSettings {
     /// Hotkey string in "Mod+Mod+Key" format, e.g. "Ctrl+Alt+D".
     #[serde(default = "default_hotkey")]
     pub hotkey: String,
-    /// Which LLM provider to use for translation of longer text.
+    /// Which LLM provider to use. Always `OpenAiCompatible` — the variant
+    /// exists for old-settings parse compatibility only.
     #[serde(default)]
     pub llm_provider: LlmProvider,
     /// API key for the configured LLM provider.
     /// Stored in plaintext; future work may move to OS keyring.
     #[serde(default)]
     pub api_key: String,
-    /// Base URL for the API. Required for OpenAI-compatible providers,
-    /// optional for Anthropic (defaults to api.anthropic.com).
+    /// Base URL for the API, e.g. "https://api.openai.com/v1". Required.
     #[serde(default)]
     pub api_base_url: String,
     /// Model name, e.g. "claude-sonnet-4-6" or "gpt-4o-mini".
@@ -156,7 +160,7 @@ fn default_hotkey() -> String {
 }
 
 fn default_model() -> String {
-    "claude-sonnet-4-6".to_string()
+    "gpt-4o-mini".to_string()
 }
 
 fn default_target_lang() -> String {
@@ -164,13 +168,19 @@ fn default_target_lang() -> String {
 }
 
 /// LLM provider for AI-powered translation.
+///
+/// Only OpenAI-compatible endpoints are supported. The `Anthropic` variant
+/// is kept solely so settings.toml files written by older versions still
+/// parse; on load it is coerced to [`LlmProvider::OpenAiCompatible`] (see
+/// `load_from_disk`).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum LlmProvider {
-    /// Anthropic Claude API.
-    #[default]
+    /// Kept for old-settings parse compatibility; coerced on load.
     Anthropic,
-    /// Any OpenAI-compatible endpoint (Ollama, Groq, OpenRouter, etc.).
+    /// Any OpenAI-compatible endpoint (OpenAI, OpenRouter, Groq, z.ai,
+    /// Ollama, llama.cpp, vLLM…).
+    #[default]
     OpenAiCompatible,
 }
 
@@ -200,7 +210,10 @@ fn load_from_disk() -> Settings {
     }
     match fs::read_to_string(&path) {
         Ok(s) => match toml::from_str(&s) {
-            Ok(parsed) => parsed,
+            Ok(mut parsed) => {
+                migrate(&mut parsed);
+                parsed
+            }
             Err(e) => {
                 warn!("settings: parse failed ({e}); using defaults");
                 Settings::default()
@@ -209,6 +222,20 @@ fn load_from_disk() -> Settings {
         Err(e) => {
             warn!("settings: read failed ({e}); using defaults");
             Settings::default()
+        }
+    }
+}
+
+/// One-time migrations for settings written by older versions. Currently:
+/// coerce the removed Anthropic provider to OpenAI-compatible, and give it
+/// the OpenAI base URL when the file has none (Anthropic used a different
+/// endpoint, so the old base URL — if any — would be wrong anyway).
+fn migrate(s: &mut Settings) {
+    let qt = &mut s.quick_translate;
+    if qt.llm_provider == LlmProvider::Anthropic {
+        qt.llm_provider = LlmProvider::OpenAiCompatible;
+        if qt.api_base_url.is_empty() {
+            qt.api_base_url = "https://api.openai.com/v1".to_string();
         }
     }
 }
@@ -278,6 +305,19 @@ pub fn set_window_calls_hint_dismissed(dismissed: bool) -> anyhow::Result<()> {
         return Ok(());
     }
     current.window_calls_hint_dismissed = dismissed;
+    save(&current)?;
+    *SETTINGS.write().unwrap() = current;
+    Ok(())
+}
+
+/// Persist the "configure Quick Translate AI" hint dismissal, preserving
+/// every other field (same pattern as [`update_consent`]).
+pub fn set_ai_setup_hint_dismissed(dismissed: bool) -> anyhow::Result<()> {
+    let mut current = current();
+    if current.ai_setup_hint_dismissed == dismissed {
+        return Ok(());
+    }
+    current.ai_setup_hint_dismissed = dismissed;
     save(&current)?;
     *SETTINGS.write().unwrap() = current;
     Ok(())

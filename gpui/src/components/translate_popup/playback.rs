@@ -6,13 +6,12 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use gpui::AppContext as _;
 use gpui::{
     Entity, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement as _, Styled as _, div, px,
 };
 use gpui_component::{h_flex, v_flex};
-
-use gpui::AppContext as _;
 
 use crate::playback::PlaybackSnapshot;
 use crate::{colors, state::DictState};

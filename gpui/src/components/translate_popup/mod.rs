@@ -15,11 +15,6 @@ pub(crate) mod sections;
 use std::cell::Cell;
 use std::rc::Rc;
 
-use crate::{
-    colors,
-    components::{banner, spinner, text_editor::EditorEvent, text_editor::EditorState},
-    state::DictState,
-};
 use gpui::{
     AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
     ParentElement, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
@@ -29,6 +24,11 @@ use gpui_component::scroll::ScrollableElement;
 use gpui_component::{h_flex, v_flex};
 
 pub(crate) use self::playback::Slot;
+use crate::{
+    colors,
+    components::{banner, spinner, text_editor::EditorEvent, text_editor::EditorState},
+    state::DictState,
+};
 
 /// Window height bounds for the popup. The window is sized to its content
 /// (see [`MeasureProbes`]) but never below/above these.
@@ -449,11 +449,7 @@ pub fn translate_popup(state_entity: &Entity<DictState>, props: PopupProps) -> g
     // border, bottom rounding, toggle above the panel it reveals. The frame
     // has no padding of its own (the body carries it), so no negative
     // margins are needed.
-    let provider_summary = format!(
-        "{} · {}",
-        crate::quick_translate::provider_display_name(settings.llm_provider),
-        settings.hotkey
-    );
+    let provider_summary = format!("OpenAI-compatible · {}", settings.hotkey);
     let mut footer = v_flex()
         .flex_shrink_0()
         .border_t_1()

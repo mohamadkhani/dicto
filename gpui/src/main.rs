@@ -18,9 +18,9 @@ mod selection;
 mod state;
 mod tray;
 mod tts;
-mod window_move;
 #[cfg(target_os = "windows")]
 mod win32;
+mod window_move;
 
 use std::borrow::Cow;
 use std::sync::atomic::AtomicBool;

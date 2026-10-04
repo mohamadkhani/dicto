@@ -211,6 +211,15 @@ impl DictApp {
                                 (false, String::new())
                             }
                         } else {
+                            if tray_triggered {
+                                // No engine exists (feature disabled in
+                                // settings) — say so instead of silently
+                                // eating the trigger.
+                                tracing::warn!(
+                                    "quick translate triggered while disabled — \
+                                     enable it in Settings → Translation"
+                                );
+                            }
                             (false, String::new())
                         };
                     // A new selection (or a re-trigger) makes any TTS clip
@@ -377,6 +386,13 @@ impl Render for DictApp {
             s.window_calls_missing == Some(true) && !s.window_calls_hint_dismissed
         };
 
+        // Quick Translate setup hint: the AI provider (API key / base URL)
+        // isn't configured yet — route the user to the settings tab.
+        let ai_setup_hint = {
+            let s = self.state.read(cx);
+            !s.translation_ready() && !s.ai_setup_hint_dismissed
+        };
+
         let input_handle = self.input.clone();
         let main = v_flex()
             .size_full()
@@ -395,9 +411,8 @@ impl Render for DictApp {
                             .child("Dicto"),
                     ),
             )
-            .children(window_calls_hint.then(|| {
-                window_calls_banner(&self.state, cx)
-            }))
+            .children(window_calls_hint.then(|| window_calls_banner(&self.state, cx)))
+            .children(ai_setup_hint.then(|| ai_setup_banner(&self.state, cx)))
             // Search row hosts the cog on its right edge so the button
             // sits outside the title bar's OS-claimed drag region.
             .child(search_bar::search_bar(
@@ -681,8 +696,98 @@ fn window_calls_banner(state: &Entity<DictState>, cx: &Context<DictApp>) -> gpui
                                 s.window_calls_hint_dismissed = true;
                                 cx.notify();
                             });
-                            let _ =
-                                mdict_rs::settings::set_window_calls_hint_dismissed(true);
+                            let _ = mdict_rs::settings::set_window_calls_hint_dismissed(true);
+                        })),
+                ),
+        )
+        .into_any_element()
+}
+
+/// Startup hint shown while the Quick Translate AI provider isn't
+/// configured (missing API key / base URL): "Configure" jumps straight to
+/// the Quick Translate settings tab. Dismissal is persisted in
+/// settings.toml (same pattern as [`window_calls_banner`]).
+fn ai_setup_banner(state: &Entity<DictState>, cx: &Context<DictApp>) -> gpui::AnyElement {
+    let dismiss_state = state.clone();
+    let configure_state = state.clone();
+
+    h_flex()
+        .w_full()
+        .items_center()
+        .justify_between()
+        .gap(px(8.))
+        .px(px(12.))
+        .py(px(6.))
+        .bg(colors::surface())
+        .border_b_1()
+        .border_color(colors::border())
+        .child(
+            h_flex()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(colors::update())
+                        .child("✨"),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(colors::text_secondary())
+                        .child(SharedString::from(
+                            "Quick Translate: translate selected text anywhere and \
+                             hear it spoken — add an AI key to enable it.",
+                        )),
+                ),
+        )
+        .child(
+            h_flex()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .id("ai-setup-configure")
+                        .cursor_pointer()
+                        .px(px(8.))
+                        .py(px(3.))
+                        .rounded(px(6.))
+                        .text_size(px(12.))
+                        .text_color(colors::primary())
+                        .border_1()
+                        .border_color(colors::border())
+                        .hover(|s| s.bg(colors::hover()))
+                        .child("Configure")
+                        .on_click(cx.listener(move |_this, _ev, window, cx| {
+                            cx.update_entity(&configure_state, |s, cx| {
+                                // Quick Translate tab (0 Dictionaries, 1 Import,
+                                // 2 Download, 3 Quick Translate).
+                                s.settings_active_tab = 3;
+                                cx.notify();
+                            });
+                            open_settings_dialog(configure_state.clone(), window, cx);
+                        })),
+                )
+                .child(
+                    v_flex()
+                        .id("ai-setup-dismiss")
+                        .cursor_pointer()
+                        .size(px(22.))
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(6.))
+                        .hover(|s| s.bg(colors::hover()))
+                        .child(
+                            gpui::svg()
+                                .path("icons/close.svg")
+                                .self_center()
+                                .size(px(14.))
+                                .text_color(colors::text_secondary()),
+                        )
+                        .on_click(cx.listener(move |_this, _ev, _window, cx| {
+                            cx.update_entity(&dismiss_state, |s, cx| {
+                                s.ai_setup_hint_dismissed = true;
+                                cx.notify();
+                            });
+                            let _ = mdict_rs::settings::set_ai_setup_hint_dismissed(true);
                         })),
                 ),
         )
@@ -757,91 +862,95 @@ fn cog_button(state: Entity<DictState>) -> gpui::AnyElement {
         .hover(|s| s.bg(colors::surface()))
         .child(SharedString::from("\u{2699} Settings"))
         .on_click(move |_, window, cx| {
-            let state = state.clone();
             dicto_telemetry::get().track(dicto_telemetry::Event::SettingsOpened {
                 source: dicto_telemetry::SettingsSource::GearButton,
             });
 
-            window.open_dialog(cx, move |dialog, _window, _cx| {
-                let state = state.clone();
-
-                dialog
-                    .title(div().child("Settings"))
-                    .w_full()
-                    .h(px(560.))
-                    .close_button(true)
-                    .overlay_closable(true)
-                    .content(move |content, window, cx| {
-                        let active_tab = state.read(cx).settings_active_tab;
-
-                        content.child(
-                            v_flex()
-                                .w_full()
-                                .h_full()
-                                .gap(px(12.))
-                                .child(crate::components::settings_window::header_tabs_for_dialog(
-                                    state.clone(),
-                                    active_tab,
-                                    cx,
-                                ))
-                                .child(if active_tab == 0 {
-                                    crate::components::settings_panel::dictionaries_tab_content(
-                                        state.clone(),
-                                        cx,
-                                    )
-                                } else if active_tab == 1 {
-                                    let is_importing =
-                                        state.read(cx).import_files.iter().any(|f| {
-                                            matches!(
-                                                f.status,
-                                                crate::state::ImportStatus::Copying
-                                                    | crate::state::ImportStatus::Indexing
-                                            )
-                                        });
-                                    crate::components::import_panel::import_panel_content(
-                                        state.clone(),
-                                        is_importing,
-                                        cx,
-                                    )
-                                } else if active_tab == 2 {
-                                    crate::components::download_panel::download_tab_content(
-                                        state.clone(),
-                                        window,
-                                        cx,
-                                    )
-                                } else if active_tab == 3 {
-                                    crate::components::quick_translate_panel::quick_translate_tab_content(
-                                        state.clone(),
-                                        window,
-                                        cx,
-                                    )
-                                } else if active_tab == 4 {
-                                    crate::components::settings_panel::telemetry_tab_content(
-                                        state.clone(),
-                                        cx,
-                                    )
-                                } else if active_tab == 5 {
-                                    crate::components::about_panel::panel_content()
-                                } else {
-                                    let is_importing =
-                                        state.read(cx).import_files.iter().any(|f| {
-                                            matches!(
-                                                f.status,
-                                                crate::state::ImportStatus::Copying
-                                                    | crate::state::ImportStatus::Indexing
-                                            )
-                                        });
-                                    crate::components::import_panel::import_panel_content(
-                                        state.clone(),
-                                        is_importing,
-                                        cx,
-                                    )
-                                }),
-                        )
-                    })
-            });
+            open_settings_dialog(state.clone(), window, cx);
         })
         .into_any_element()
+}
+
+/// Open the settings dialog on the currently active tab
+/// (`DictState::settings_active_tab`). Callers can pre-select a tab by
+/// updating the state before calling this.
+fn open_settings_dialog(state: Entity<DictState>, window: &mut Window, cx: &mut gpui::App) {
+    window.open_dialog(cx, move |dialog, _window, _cx| {
+        let state = state.clone();
+
+        dialog
+            .title(div().child("Settings"))
+            .w_full()
+            .h(px(560.))
+            .close_button(true)
+            .overlay_closable(true)
+            .content(move |content, window, cx| {
+                let active_tab = state.read(cx).settings_active_tab;
+
+                content.child(
+                    v_flex()
+                        .w_full()
+                        .h_full()
+                        .gap(px(12.))
+                        .child(crate::components::settings_window::header_tabs_for_dialog(
+                            state.clone(),
+                            active_tab,
+                            cx,
+                        ))
+                        .child(if active_tab == 0 {
+                            crate::components::settings_panel::dictionaries_tab_content(
+                                state.clone(),
+                                cx,
+                            )
+                        } else if active_tab == 1 {
+                            let is_importing = state.read(cx).import_files.iter().any(|f| {
+                                matches!(
+                                    f.status,
+                                    crate::state::ImportStatus::Copying
+                                        | crate::state::ImportStatus::Indexing
+                                )
+                            });
+                            crate::components::import_panel::import_panel_content(
+                                state.clone(),
+                                is_importing,
+                                cx,
+                            )
+                        } else if active_tab == 2 {
+                            crate::components::download_panel::download_tab_content(
+                                state.clone(),
+                                window,
+                                cx,
+                            )
+                        } else if active_tab == 3 {
+                            crate::components::quick_translate_panel::quick_translate_tab_content(
+                                state.clone(),
+                                window,
+                                cx,
+                            )
+                        } else if active_tab == 4 {
+                            crate::components::settings_panel::telemetry_tab_content(
+                                state.clone(),
+                                cx,
+                            )
+                        } else if active_tab == 5 {
+                            crate::components::about_panel::panel_content()
+                        } else {
+                            let is_importing = state.read(cx).import_files.iter().any(|f| {
+                                matches!(
+                                    f.status,
+                                    crate::state::ImportStatus::Copying
+                                        | crate::state::ImportStatus::Indexing
+                                )
+                            });
+                            crate::components::import_panel::import_panel_content(
+                                state.clone(),
+                                is_importing,
+                                cx,
+                            )
+                        }),
+                )
+            })
+    });
 }
 
 fn open_get_dictionaries_dialog(

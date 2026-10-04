@@ -16,9 +16,8 @@ use gpui::{
 };
 use gpui_component::{h_flex, v_flex};
 
-use crate::{colors, components::text_editor, state::DictState};
-
 use super::playback::{Slot, playback_controls};
+use crate::{colors, components::text_editor, state::DictState};
 
 pub(crate) type PlaybackSnapshot = crate::playback::PlaybackSnapshot;
 

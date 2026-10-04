@@ -114,14 +114,22 @@ pub struct DictState {
     pub qt_base_url_input: Option<gpui::Entity<gpui_component::input::InputState>>,
     pub qt_model_input: Option<gpui::Entity<gpui_component::input::InputState>>,
     pub qt_target_lang_input: Option<gpui::Entity<gpui_component::input::InputState>>,
+    /// Adaptive model picker (chips/dropdown) for the settings tab — the
+    /// same `OptionPicker` the popup's Options panel uses. Lazily created
+    /// on first render, then reconciled from the live settings.
+    pub qt_model_picker: Option<gpui::Entity<crate::components::option_picker::OptionPicker>>,
+    /// Adaptive target-language picker for the settings tab (same pattern
+    /// as `qt_model_picker`).
+    pub qt_target_lang_picker: Option<gpui::Entity<crate::components::option_picker::OptionPicker>>,
+    /// Adaptive TTS model picker for the settings tab (same pattern as
+    /// `qt_model_picker`).
+    pub qt_tts_model_picker: Option<gpui::Entity<crate::components::option_picker::OptionPicker>>,
+    /// Adaptive TTS voice picker — shown when the selected model publishes
+    /// its voices; otherwise the free-text voice input is used instead.
+    pub qt_tts_voice_picker: Option<gpui::Entity<crate::components::option_picker::OptionPicker>>,
     /// TTS settings input fields (lazily created, same pattern as above).
     pub qt_tts_api_key_input: Option<gpui::Entity<gpui_component::input::InputState>>,
-    #[allow(dead_code)]
     pub qt_tts_base_url_input: Option<gpui::Entity<gpui_component::input::InputState>>,
-    #[allow(dead_code)]
-    pub qt_tts_model_input: Option<gpui::Entity<gpui_component::input::InputState>>,
-    #[allow(dead_code)]
-    pub qt_tts_voice_input: Option<gpui::Entity<gpui_component::input::InputState>>,
     /// True once we've seeded the input states from loaded settings, so we
     /// don't clobber the user's in-progress edits on every re-render.
     pub qt_inputs_seeded: bool,
@@ -151,6 +159,43 @@ pub struct DictState {
     pub window_calls_missing: Option<bool>,
     /// User dismissed the window-calls hint (persisted in settings.toml).
     pub window_calls_hint_dismissed: bool,
+
+    /// User dismissed the "configure Quick Translate AI" hint banner
+    /// (persisted in settings.toml).
+    pub ai_setup_hint_dismissed: bool,
+
+    /// Live result of the [Test] button next to the translation API key
+    /// field in the settings tab.
+    pub qt_translation_test: QtKeyTest,
+    /// Live result of the [Test] button next to the TTS API key field in
+    /// the settings tab.
+    pub qt_tts_test: QtKeyTest,
+    /// Live result of the "Load models" button next to the Model picker
+    /// (OpenAI-compatible provider only).
+    pub qt_models_load: QtKeyTest,
+    /// Live result of the "Load models" button under the TTS Model picker.
+    pub qt_tts_models_load: QtKeyTest,
+    /// Model ids fetched from the OpenAI-compatible /models endpoint.
+    /// Empty = never loaded → the model picker falls back to the hardcoded
+    /// catalog.
+    pub qt_openai_models: Vec<String>,
+    /// TTS-capable models fetched from /models (TTS-filtered), with the
+    /// voices each model publishes. Empty = never loaded → the TTS model
+    /// picker falls back to the hardcoded list.
+    pub qt_tts_models: Vec<dicto_translate::openai::TtsModel>,
+    /// Set once per app run after the automatic models/voices load (the
+    /// popup triggers it on open) — prevents repeated background fetches.
+    pub qt_models_autoloaded: bool,
+}
+
+/// Outcome of a settings-tab key test. `Ok`/`Err` carry a short,
+/// display-ready message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QtKeyTest {
+    Idle,
+    Running,
+    Ok(String),
+    Err(String),
 }
 
 impl DictState {
@@ -192,11 +237,13 @@ impl DictState {
             qt_api_key_input: None,
             qt_base_url_input: None,
             qt_model_input: None,
+            qt_model_picker: None,
             qt_target_lang_input: None,
+            qt_target_lang_picker: None,
+            qt_tts_model_picker: None,
+            qt_tts_voice_picker: None,
             qt_tts_api_key_input: None,
             qt_tts_base_url_input: None,
-            qt_tts_model_input: None,
-            qt_tts_voice_input: None,
             qt_inputs_seeded: false,
             qt_popup_window: None,
             qt_replace_pending: false,
@@ -207,9 +254,25 @@ impl DictState {
                 Some(false)
             },
             window_calls_hint_dismissed: settings.window_calls_hint_dismissed,
+            ai_setup_hint_dismissed: settings.ai_setup_hint_dismissed,
+            qt_translation_test: QtKeyTest::Idle,
+            qt_tts_test: QtKeyTest::Idle,
+            qt_models_load: QtKeyTest::Idle,
+            qt_tts_models_load: QtKeyTest::Idle,
+            qt_openai_models: Vec::new(),
+            qt_tts_models: Vec::new(),
+            qt_models_autoloaded: false,
             playback_source: crate::playback::PlaybackController::default(),
             playback_translation: crate::playback::PlaybackController::default(),
         }
+    }
+
+    /// Whether the Quick Translate AI provider is fully configured:
+    /// API key and base URL present. The setup hint banner shows while
+    /// this is false.
+    pub fn translation_ready(&self) -> bool {
+        let qt = &self.quick_translate;
+        !qt.api_key.is_empty() && !qt.api_base_url.is_empty()
     }
 
     /// Reload the hotkey registration after settings change.

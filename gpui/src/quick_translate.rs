@@ -3,13 +3,13 @@
 //! Wires together:
 //! - Global hotkey manager (X11 / tray menu fallback)
 //! - Selection reader (clipboard / primary selection)
-//! - LLM translator (Anthropic / OpenAI-compatible)
+//! - LLM translator (OpenAI-compatible endpoints)
 //! - Popup window with result display
 
 use std::sync::Arc;
 
 use dicto_translate::{TranslationRequest, Translator, translator_from_settings};
-use mdict_rs::settings::{LlmProvider, QuickTranslateSettings};
+use mdict_rs::settings::QuickTranslateSettings;
 use tracing::{error, info, warn};
 
 use crate::components::translate_popup::PopupState;
@@ -70,7 +70,6 @@ impl QuickTranslateEngine {
 
     /// Update settings and reconfigure the hotkey/translator as needed.
     pub fn update_settings(&mut self, new_settings: QuickTranslateSettings) {
-        let old_provider = self.settings.llm_provider;
         let old_api_key = self.settings.api_key.clone();
         let old_base_url = self.settings.api_base_url.clone();
         let old_model = self.settings.model.clone();
@@ -79,13 +78,12 @@ impl QuickTranslateEngine {
 
         self.settings = new_settings;
 
-        // Reconfigure translator if provider/key/url/model changed
-        let provider_changed = old_provider != self.settings.llm_provider
-            || old_api_key != self.settings.api_key
+        // Reconfigure translator if credentials/model changed
+        let translator_changed = old_api_key != self.settings.api_key
             || old_base_url != self.settings.api_base_url
             || old_model != self.settings.model;
 
-        if provider_changed {
+        if translator_changed {
             self.translator = build_translator(&self.settings);
         }
 
@@ -206,7 +204,7 @@ impl QuickTranslateEngine {
                 source_lang: None,
                 target_lang: self.settings.target_lang.clone(),
             },
-            provider: provider_display_name(self.settings.llm_provider),
+            provider: "OpenAI-compatible",
             model: self.settings.model.clone(),
             translator: self.translator.clone(),
             original,
@@ -354,10 +352,6 @@ pub struct TranslationOutcome {
 fn build_translator(settings: &QuickTranslateSettings) -> Arc<dyn Translator> {
     Arc::from(translator_from_settings(
         settings.enabled,
-        match settings.llm_provider {
-            LlmProvider::Anthropic => dicto_translate::LlmProvider::Anthropic,
-            LlmProvider::OpenAiCompatible => dicto_translate::LlmProvider::OpenAiCompatible,
-        },
         &settings.api_key,
         &settings.api_base_url,
         &settings.model,
@@ -371,12 +365,4 @@ fn create_and_register(
     let manager = create_hotkey_manager();
     manager.register(QUICK_TRANSLATE_ID, &settings.hotkey)?;
     Ok(manager)
-}
-
-/// Display name for the LLM provider.
-pub fn provider_display_name(provider: LlmProvider) -> &'static str {
-    match provider {
-        LlmProvider::Anthropic => "Anthropic",
-        LlmProvider::OpenAiCompatible => "OpenAI-compatible",
-    }
 }

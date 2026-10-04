@@ -1,5 +1,3 @@
-use std::fmt;
-
 use serde::{Deserialize, Serialize};
 
 /// Errors that can occur during translation.
@@ -39,26 +37,8 @@ pub struct TranslationResult {
     pub detected_lang: Option<String>,
     /// Model that produced the translation.
     pub model: String,
-    /// Provider name ("anthropic" / "openai_compatible").
+    /// Provider name ("openai_compatible").
     pub provider: String,
-}
-
-/// Which LLM provider to use.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum LlmProvider {
-    #[default]
-    Anthropic,
-    OpenAiCompatible,
-}
-
-impl fmt::Display for LlmProvider {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LlmProvider::Anthropic => write!(f, "Anthropic"),
-            LlmProvider::OpenAiCompatible => write!(f, "OpenAI-compatible"),
-        }
-    }
 }
 
 /// Trait for translation providers.
@@ -79,7 +59,6 @@ pub trait Translator: Send + Sync {
 /// Max input text length to prevent accidental huge API calls.
 pub const MAX_TEXT_LENGTH: usize = 10_000;
 
-pub mod anthropic;
 pub mod null;
 pub mod openai;
 
@@ -87,12 +66,11 @@ pub use null::NullTranslator;
 
 /// Build a translator from settings.
 ///
-/// Returns `NullTranslator` if the settings are incomplete or the feature
-/// is disabled, so callers can always use `translator.translate()` without
-/// checking configuration first.
+/// Returns `NullTranslator` if the settings are incomplete (no API key),
+/// so callers can always use `translator.translate()` without checking
+/// configuration first.
 pub fn translator_from_settings(
     enabled: bool,
-    provider: LlmProvider,
     api_key: &str,
     api_base_url: &str,
     model: &str,
@@ -101,46 +79,18 @@ pub fn translator_from_settings(
         return Box::new(NullTranslator);
     }
 
-    match provider {
-        LlmProvider::Anthropic => {
-            if api_key.is_empty() {
-                tracing::debug!(
-                    "translate: Anthropic selected but no API key, using NullTranslator"
-                );
-                return Box::new(NullTranslator);
-            }
-            let client = anthropic::AnthropicTranslator::builder()
-                .api_key(api_key.to_string())
-                .model(if model.is_empty() {
-                    anthropic::DEFAULT_MODEL.to_string()
-                } else {
-                    model.to_string()
-                })
-                .maybe_base_url(if api_base_url.is_empty() {
-                    None
-                } else {
-                    Some(api_base_url.to_string())
-                })
-                .build();
-            Box::new(client)
-        }
-        LlmProvider::OpenAiCompatible => {
-            if api_key.is_empty() || api_base_url.is_empty() {
-                tracing::debug!(
-                    "translate: OpenAI-compatible selected but missing config, using NullTranslator"
-                );
-                return Box::new(NullTranslator);
-            }
-            let client = openai::OpenaiTranslator::builder()
-                .api_key(api_key.to_string())
-                .base_url(api_base_url.to_string())
-                .model(if model.is_empty() {
-                    openai::DEFAULT_MODEL.to_string()
-                } else {
-                    model.to_string()
-                })
-                .build();
-            Box::new(client)
-        }
+    if api_key.is_empty() {
+        tracing::debug!("translate: no API key, using NullTranslator");
+        return Box::new(NullTranslator);
     }
+    let client = openai::OpenaiTranslator::builder()
+        .api_key(api_key.to_string())
+        .base_url(api_base_url.to_string())
+        .model(if model.is_empty() {
+            openai::DEFAULT_MODEL.to_string()
+        } else {
+            model.to_string()
+        })
+        .build();
+    Box::new(client)
 }

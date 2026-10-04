@@ -3,8 +3,12 @@
 //! Allows the user to configure the quick-translate feature: enable/disable,
 //! hotkey, LLM provider, API key, model, target language.
 
+use crate::{
+    colors,
+    state::{DictState, QtKeyTest},
+};
 use gpui::{
-    AppContext as _, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement,
+    AppContext as _, AsyncApp, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement,
     SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::{
@@ -12,9 +16,6 @@ use gpui_component::{
     input::{Input, InputState},
     v_flex,
 };
-use mdict_rs::settings::LlmProvider;
-
-use crate::{colors, state::DictState};
 
 /// Build the Quick Translate settings tab content.
 pub fn quick_translate_tab_content(
@@ -74,7 +75,6 @@ pub fn quick_translate_tab_content(
     // Hotkey display
     let hotkey_value = settings.hotkey.clone();
     let hotkey_row = h_flex()
-        .justify_between()
         .items_center()
         .py(px(8.))
         .gap(px(12.))
@@ -118,9 +118,6 @@ pub fn quick_translate_tab_content(
         None
     };
 
-    // Provider selector
-    let provider_row = provider_selector(&settings, state.clone());
-
     // API key input
     let api_key_row = input_row(
         "API Key",
@@ -129,22 +126,42 @@ pub fn quick_translate_tab_content(
         cx,
     );
 
-    // Base URL input (only for OpenAI-compatible)
-    let base_url_row = match settings.llm_provider {
-        LlmProvider::OpenAiCompatible => Some(input_row(
-            "API Base URL",
-            &state.read(cx).qt_base_url_input.clone().unwrap(),
-            false,
-            cx,
-        )),
-        LlmProvider::Anthropic => None,
-    };
+    // Base URL input
+    let base_url_row = input_row(
+        "API Base URL",
+        &state.read(cx).qt_base_url_input.clone().unwrap(),
+        false,
+        cx,
+    );
 
-    // Model selector — segmented buttons per provider (hardcoded valid list).
-    let model_row = model_selector(&settings, state.clone());
+    // [Test] row after the translation fields — verifies key + base URL +
+    // model against the real provider and shows the translated sample.
+    let translation_test_state = state.clone();
+    let translation_test_row = action_status_row(
+        "qt-test-translation",
+        "Test",
+        "Testing…",
+        state.read(cx).qt_translation_test.clone(),
+        move |cx| run_translation_test(translation_test_state.clone(), cx),
+    );
 
-    // Target language — common-language buttons + "Custom…" fallback input.
-    let target_lang_row = target_lang_selector(&settings, state.clone(), window, cx);
+    // Model picker — same adaptive picker (chips/dropdown) as the popup's
+    // Options panel, reconciled from live settings each render.
+    let model_row = model_picker_row(&settings, &state, window, cx);
+
+    // "Load models" row: fetches the live model list from
+    // {base_url}/models; until then the hardcoded catalog shows.
+    let models_load_state = state.clone();
+    let models_load_row = action_status_row(
+        "qt-models-load",
+        "Load models",
+        "Loading…",
+        state.read(cx).qt_models_load.clone(),
+        move |cx| run_models_load(models_load_state.clone(), cx),
+    );
+
+    // Target language — same adaptive picker as the popup's Options panel.
+    let target_lang_row = target_lang_picker_row(&settings, &state, window, cx);
 
     // --- Text-to-Speech section ---
     let tts_toggle_state = state.clone();
@@ -166,6 +183,14 @@ pub fn quick_translate_tab_content(
             });
         }));
 
+    // Base URL above API key, matching the translation section's order.
+    let tts_base_url_row = input_row(
+        "TTS Base URL",
+        &state.read(cx).qt_tts_base_url_input.clone().unwrap(),
+        false,
+        cx,
+    );
+
     let tts_api_key_row = input_row(
         "TTS API Key",
         &state.read(cx).qt_tts_api_key_input.clone().unwrap(),
@@ -173,16 +198,41 @@ pub fn quick_translate_tab_content(
         cx,
     );
 
-    // TTS provider → model + voice (hardcoded presets; sets model+base_url together).
-    let tts_preset_row = tts_preset_selector(&settings, state.clone());
-    let tts_voice_row = tts_voice_selector(&settings, state.clone());
+    // TTS model picker + live load from {base_url}/models (TTS-filtered).
+    let tts_model_row = tts_model_picker_row(&settings, &state, window, cx);
+    let tts_models_load_state = state.clone();
+    let tts_models_load_row = action_status_row(
+        "qt-tts-models-load",
+        "Load TTS models",
+        "Loading…",
+        state.read(cx).qt_tts_models_load.clone(),
+        move |cx| run_tts_models_load(tts_models_load_state.clone(), cx),
+    );
+
+    // Voice picker: only shown when the selected model publishes voices
+    // via the API (`supported_voices`). A model without a published list
+    // uses its default voice — the row is hidden entirely.
+    let tts_voice_row = (!tts_voices_for(&settings, &state, cx).is_empty())
+        .then(|| tts_voice_picker_row(&settings, &state, window, cx));
+
+    // [Test] row after the TTS fields — synthesizes one short clip (no
+    // playback) to verify key + endpoint + model + voice.
+    let tts_test_state = state.clone();
+    let tts_test_row = action_status_row(
+        "qt-test-tts",
+        "Test",
+        "Testing…",
+        state.read(cx).qt_tts_test.clone(),
+        move |cx| run_tts_test(tts_test_state.clone(), cx),
+    );
 
     let tts_note = div()
         .text_size(px(11.))
         .text_color(colors::text_secondary())
         .child(SharedString::from(
-            "When enabled, Speak uses an OpenAI-compatible /audio/speech endpoint. \
-             Pick a provider+model, then a voice. Leave disabled to use system TTS (espeak-ng).",
+            "When enabled, Speak uses an OpenAI-compatible /audio/speech endpoint: \
+             set the base URL, API key, model, and voice of your provider. \
+             Leave disabled to use system TTS (espeak-ng).",
         ));
 
     // Warning if API key is missing
@@ -223,14 +273,13 @@ pub fn quick_translate_tab_content(
         body = body.child(note);
     }
     body = body.child(divider());
-    body = body.child(section_title("Translation Provider"));
-    body = body.child(provider_row);
+    body = body.child(section_title("Translation"));
+    body = body.child(base_url_row);
     body = body.child(api_key_row);
-    if let Some(row) = base_url_row {
-        body = body.child(row);
-    }
     body = body.child(model_row);
+    body = body.child(models_load_row);
     body = body.child(target_lang_row);
+    body = body.child(translation_test_row);
     if let Some(n) = warning {
         body = body.child(n);
     }
@@ -239,9 +288,14 @@ pub fn quick_translate_tab_content(
     body = body.child(section_title("Text-to-Speech"));
     body = body.child(tts_enable_row);
     if settings.tts.enabled {
+        body = body.child(tts_base_url_row);
         body = body.child(tts_api_key_row);
-        body = body.child(tts_preset_row);
-        body = body.child(tts_voice_row);
+        body = body.child(tts_model_row);
+        body = body.child(tts_models_load_row);
+        if let Some(row) = tts_voice_row {
+            body = body.child(row);
+        }
+        body = body.child(tts_test_row);
     }
     body = body.child(tts_note);
 
@@ -270,6 +324,287 @@ fn section_title(text: &str) -> gpui::AnyElement {
 
 fn divider() -> gpui::AnyElement {
     div().h(px(1.)).bg(colors::border()).into_any_element()
+}
+
+/// Row with an action button plus the live result of the last run —
+/// shared by the key [Test] buttons and the "Load models" action.
+/// Placed directly under a related field so failures are caught at
+/// configuration time instead of on first real use.
+fn action_status_row(
+    id: &'static str,
+    idle_label: &str,
+    running_label: &str,
+    status: QtKeyTest,
+    on_click: impl Fn(&mut gpui::App) + 'static,
+) -> gpui::AnyElement {
+    let (label, msg, color) = match &status {
+        QtKeyTest::Idle => (idle_label.to_string(), None, colors::text_secondary()),
+        QtKeyTest::Running => (running_label.to_string(), None, colors::text_secondary()),
+        QtKeyTest::Ok(text) => (
+            idle_label.to_string(),
+            Some(format!("✓ {text}")),
+            colors::success(),
+        ),
+        QtKeyTest::Err(text) => (
+            idle_label.to_string(),
+            Some(format!("✗ {text}")),
+            colors::error(),
+        ),
+    };
+
+    h_flex()
+        .w_full()
+        .items_center()
+        .gap(px(8.))
+        .py(px(2.))
+        // Align with the content column of input_row / labeled_row
+        // (120px label + 12px gap).
+        .pl(px(132.))
+        .child(
+            div()
+                .id(SharedString::from(id))
+                .cursor_pointer()
+                .px(px(8.))
+                .py(px(3.))
+                .rounded(px(6.))
+                .text_size(px(12.))
+                .text_color(colors::text())
+                .border_1()
+                .border_color(colors::border())
+                .hover(|s| s.bg(colors::hover()))
+                .child(SharedString::from(label))
+                .on_click(move |_, _, cx| on_click(cx)),
+        )
+        // flex_1 + min_w(0): the message wraps inside the remaining width
+        // instead of being clipped at the window edge.
+        .children(msg.map(|m| {
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .text_size(px(11.))
+                .text_color(color)
+                .child(SharedString::from(m))
+        }))
+        .into_any_element()
+}
+
+/// Truncate a message for display, cutting on a char boundary.
+fn shorten(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.trim().to_string()
+    } else {
+        let cut: String = s.chars().take(max).collect();
+        format!("{}…", cut.trim_end())
+    }
+}
+
+/// Fetch the model list from the configured OpenAI-compatible endpoint
+/// (`GET {base_url}/models`) and cache it in `qt_openai_models`; the
+/// model picker rebuilds from it on the next render. The hardcoded
+/// catalog stays the fallback until a load succeeds.
+fn run_models_load(state: Entity<DictState>, cx: &mut gpui::App) {
+    let settings = state.read(cx).quick_translate.clone();
+    // /models is public on several endpoints (e.g. OpenRouter) — the key
+    // is sent only when present.
+    if settings.api_base_url.is_empty() {
+        state.update(cx, |s, cx| {
+            s.qt_models_load = QtKeyTest::Err("API base URL is empty".into());
+            cx.notify();
+        });
+        return;
+    }
+
+    state.update(cx, |s, cx| {
+        s.qt_models_load = QtKeyTest::Running;
+        cx.notify();
+    });
+
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let (key, base) = (settings.api_key.clone(), settings.api_base_url.clone());
+        let result = cx
+            .background_executor()
+            .spawn(async move { dicto_translate::openai::list_models(&key, &base) })
+            .await;
+
+        let status = match result {
+            Ok(models) if models.is_empty() => {
+                QtKeyTest::Err("Endpoint's model list is empty".into())
+            }
+            Ok(models) => {
+                let n = models.len();
+                let status = QtKeyTest::Ok(format!("{n} models loaded"));
+                cx.update(|cx| {
+                    cx.update_entity(&state, |s, cx| {
+                        s.qt_openai_models = models;
+                        cx.notify();
+                    });
+                });
+                status
+            }
+            Err(e) => QtKeyTest::Err(shorten(&e.to_string(), 96)),
+        };
+        cx.update(|cx| {
+            cx.update_entity(&state, |s, cx| {
+                s.qt_models_load = status;
+                cx.notify();
+            });
+        });
+    })
+    .detach();
+}
+
+/// Fetch the TTS-capable model list from the configured OpenAI-compatible
+/// endpoint and cache it in `qt_tts_models`; the TTS model picker rebuilds
+/// from it on the next render.
+fn run_tts_models_load(state: Entity<DictState>, cx: &mut gpui::App) {
+    let tts = state.read(cx).quick_translate.tts.clone();
+    // /models is public on several endpoints (e.g. OpenRouter) — the key
+    // is sent only when present.
+    if tts.api_base_url.is_empty() {
+        state.update(cx, |s, cx| {
+            s.qt_tts_models_load = QtKeyTest::Err("TTS base URL is empty".into());
+            cx.notify();
+        });
+        return;
+    }
+
+    state.update(cx, |s, cx| {
+        s.qt_tts_models_load = QtKeyTest::Running;
+        cx.notify();
+    });
+
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let (key, base) = (tts.api_key.clone(), tts.api_base_url.clone());
+        let result = cx
+            .background_executor()
+            .spawn(async move { dicto_translate::openai::list_tts_models(&key, &base) })
+            .await;
+
+        let status = match result {
+            Ok(models) if models.is_empty() => {
+                // Some endpoints (OpenRouter) serve TTS models without
+                // listing them in /models — keep the fallback list and say
+                // so instead of a misleading green "0 loaded".
+                QtKeyTest::Err(
+                    "Endpoint's model list has no TTS models — use the fallback list".into(),
+                )
+            }
+            Ok(models) => {
+                let voices_n = models.iter().filter(|m| !m.voices.is_empty()).count();
+                let status = if voices_n > 0 {
+                    QtKeyTest::Ok(format!("{voices_n} TTS models loaded (with voice lists)"))
+                } else {
+                    QtKeyTest::Ok(format!("{} TTS models loaded", models.len()))
+                };
+                cx.update(|cx| {
+                    cx.update_entity(&state, |s, cx| {
+                        s.qt_tts_models = models;
+                        cx.notify();
+                    });
+                });
+                status
+            }
+            Err(e) => QtKeyTest::Err(shorten(&e.to_string(), 96)),
+        };
+        cx.update(|cx| {
+            cx.update_entity(&state, |s, cx| {
+                s.qt_tts_models_load = status;
+                cx.notify();
+            });
+        });
+    })
+    .detach();
+}
+
+/// Send one short sample through the configured translation provider and
+/// record the outcome in `qt_translation_test`. Credentials are tested
+/// regardless of the feature's enable toggle.
+fn run_translation_test(state: Entity<DictState>, cx: &mut gpui::App) {
+    use dicto_translate::TranslationRequest;
+
+    let settings = state.read(cx).quick_translate.clone();
+    if settings.api_key.is_empty() {
+        state.update(cx, |s, cx| {
+            s.qt_translation_test = QtKeyTest::Err("API key is empty".into());
+            cx.notify();
+        });
+        return;
+    }
+
+    state.update(cx, |s, cx| {
+        s.qt_translation_test = QtKeyTest::Running;
+        cx.notify();
+    });
+
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let result = cx
+            .background_executor()
+            .spawn(async move {
+                // `enabled` is forced true: the test is about the
+                // credentials, not the feature toggle.
+                let translator = dicto_translate::translator_from_settings(
+                    true,
+                    &settings.api_key,
+                    &settings.api_base_url,
+                    &settings.model,
+                );
+                translator.translate(TranslationRequest {
+                    text: "Hello! How are you?".to_string(),
+                    source_lang: None,
+                    target_lang: settings.target_lang.clone(),
+                })
+            })
+            .await;
+
+        let status = match result {
+            Ok(r) => QtKeyTest::Ok(format!("Works — {}", shorten(&r.translated_text, 48))),
+            Err(e) => QtKeyTest::Err(shorten(&e.to_string(), 96)),
+        };
+        cx.update(|cx| {
+            cx.update_entity(&state, |s, cx| {
+                s.qt_translation_test = status;
+                cx.notify();
+            });
+        });
+    })
+    .detach();
+}
+
+/// Synthesize one short clip through the configured AI TTS endpoint (no
+/// playback) and record the outcome in `qt_tts_test`.
+fn run_tts_test(state: Entity<DictState>, cx: &mut gpui::App) {
+    let tts = state.read(cx).quick_translate.tts.clone();
+    if tts.api_key.is_empty() {
+        state.update(cx, |s, cx| {
+            s.qt_tts_test = QtKeyTest::Err("TTS API key is empty".into());
+            cx.notify();
+        });
+        return;
+    }
+
+    state.update(cx, |s, cx| {
+        s.qt_tts_test = QtKeyTest::Running;
+        cx.notify();
+    });
+
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let result = cx
+            .background_executor()
+            .spawn(async move { crate::tts::test_synthesis(&tts) })
+            .await;
+
+        let status = match result {
+            Ok(len) => QtKeyTest::Ok(format!("Works — {len} bytes of audio")),
+            Err(e) => QtKeyTest::Err(shorten(&e.to_string(), 96)),
+        };
+        cx.update(|cx| {
+            cx.update_entity(&state, |s, cx| {
+                s.qt_tts_test = status;
+                cx.notify();
+            });
+        });
+    })
+    .detach();
 }
 
 fn toggle_switch(
@@ -360,13 +695,23 @@ fn ensure_qt_inputs(
         }
     };
 
-    // TTS field callback (API key is the only free-text TTS input; model/voice/
-    // base_url are set via the catalog selectors).
+    // TTS field callbacks (API key and base URL are free-text inputs;
+    // model/voice are set via the catalog selectors — base_url is committed
+    // by presets too, and the input reconciles to match).
     let tts_api_key_cb = {
         let s = state.clone();
         move |v: String, cx: &mut gpui::App| {
             s.update(cx, |st, cx| {
                 st.quick_translate.tts.api_key = v;
+                st.save_settings(cx);
+            });
+        }
+    };
+    let tts_base_url_cb = {
+        let s = state.clone();
+        move |v: String, cx: &mut gpui::App| {
+            s.update(cx, |st, cx| {
+                st.quick_translate.tts.api_base_url = v;
                 st.save_settings(cx);
             });
         }
@@ -398,12 +743,17 @@ fn ensure_qt_inputs(
             s.set_value(settings.target_lang.clone(), window, cx);
             s
         });
-        // TTS fields (only API key remains a free-text input; model/voice/base_url
-        // are now set via the catalog selectors).
+        // TTS fields (all free-text: base URL, key, model, voice).
         let tts_api_key = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("sk-... (separate key allowed)", window, cx);
             s.set_value(settings.tts.api_key.clone(), window, cx);
+            s
+        });
+        let tts_base_url = cx.new(|cx| {
+            let mut s = InputState::new(window, cx);
+            s.set_placeholder("https://api.openai.com/v1", window, cx);
+            s.set_value(settings.tts.api_base_url.clone(), window, cx);
             s
         });
 
@@ -412,6 +762,7 @@ fn ensure_qt_inputs(
         observe_input(cx, &model, model_cb);
         observe_input(cx, &target_lang, target_lang_cb);
         observe_input(cx, &tts_api_key, tts_api_key_cb);
+        observe_input(cx, &tts_base_url, tts_base_url_cb);
 
         state.update(cx, |st, _cx| {
             st.qt_api_key_input = Some(api_key);
@@ -419,6 +770,7 @@ fn ensure_qt_inputs(
             st.qt_model_input = Some(model);
             st.qt_target_lang_input = Some(target_lang);
             st.qt_tts_api_key_input = Some(tts_api_key);
+            st.qt_tts_base_url_input = Some(tts_base_url);
             st.qt_inputs_seeded = true;
         });
         return;
@@ -462,12 +814,21 @@ fn ensure_qt_inputs(
         cx,
         true,
     );
-    // TTS reconciliation (API key only — model/voice/base_url are set via selectors).
+    // TTS reconciliation (base URL, key, model, voice — all free text).
     reconcile(
         state,
         &settings.tts.api_key,
         |st| &st.qt_tts_api_key_input,
         |st| &mut st.quick_translate.tts.api_key,
+        window,
+        cx,
+        false,
+    );
+    reconcile(
+        state,
+        &settings.tts.api_base_url,
+        |st| &st.qt_tts_base_url_input,
+        |st| &mut st.quick_translate.tts.api_base_url,
         window,
         cx,
         false,
@@ -516,19 +877,32 @@ fn reconcile(
 }
 
 /// A labeled, focusable text-input row backed by a real `gpui-component` Input.
+/// Same geometry as [`labeled_row`] (label 120px + 12px gap + 260px content)
+/// and the same size tokens as the OptionPicker's dropdown/chips (small,
+/// 11px text, 3px vertical padding) so inputs and pickers read as one.
 fn input_row(
     label: &str,
     input: &Entity<InputState>,
     masked: bool,
     _cx: &mut gpui::App,
 ) -> gpui::AnyElement {
-    let mut el = Input::new(input).appearance(true);
+    use gpui_component::Sizable as _;
+
+    let mut el = Input::new(input)
+        .appearance(true)
+        .small()
+        .w_full()
+        .text_size(px(11.))
+        .py(px(3.))
+        .bg(colors::surface())
+        .text_color(colors::text())
+        .border_color(colors::border())
+        .rounded(px(4.));
     if masked {
         el = el.mask_toggle();
     }
 
     h_flex()
-        .justify_between()
         .items_center()
         .py(px(8.))
         .gap(px(12.))
@@ -541,67 +915,6 @@ fn input_row(
         )
         .child(div().w(px(260.)).child(el))
         .into_any_element()
-}
-
-fn provider_selector(
-    settings: &mdict_rs::settings::QuickTranslateSettings,
-    state: Entity<DictState>,
-) -> gpui::AnyElement {
-    let anthropic_selected = matches!(settings.llm_provider, LlmProvider::Anthropic);
-    let openai_selected = matches!(settings.llm_provider, LlmProvider::OpenAiCompatible);
-
-    h_flex()
-        .gap(px(8.))
-        .py(px(8.))
-        .child(provider_button("Anthropic", anthropic_selected, {
-            let s = state.clone();
-            move |cx| {
-                s.update(cx, |st, cx| {
-                    st.quick_translate.llm_provider = LlmProvider::Anthropic;
-                    st.save_settings(cx);
-                    st.reload_translator(cx);
-                });
-            }
-        }))
-        .child(provider_button("OpenAI-compatible", openai_selected, {
-            let s = state;
-            move |cx| {
-                s.update(cx, |st, cx| {
-                    st.quick_translate.llm_provider = LlmProvider::OpenAiCompatible;
-                    st.save_settings(cx);
-                    st.reload_translator(cx);
-                });
-            }
-        }))
-        .into_any_element()
-}
-
-fn provider_button<F>(label: &str, selected: bool, on_click: F) -> gpui::AnyElement
-where
-    F: Fn(&mut gpui::App) + 'static,
-{
-    let base = div()
-        .id(SharedString::from(label))
-        .px(px(12.))
-        .py(px(6.))
-        .rounded(px(6.))
-        .cursor_pointer()
-        .text_size(px(12.))
-        .on_click(move |_, _, cx| on_click(cx));
-
-    if selected {
-        base.bg(colors::primary())
-            .text_color(colors::bg())
-            .child(SharedString::from(label))
-            .into_any_element()
-    } else {
-        base.bg(colors::surface())
-            .text_color(colors::text_secondary())
-            .border_1()
-            .border_color(colors::border())
-            .child(SharedString::from(label))
-            .into_any_element()
-    }
 }
 
 /// Wrap a control in the standard label (w=120) + content row, matching
@@ -622,196 +935,304 @@ fn labeled_row(label: &str, content: gpui::AnyElement) -> gpui::AnyElement {
         .into_any_element()
 }
 
-/// Translation model selector: segmented buttons built from the catalog for
-/// the active provider. If the current model isn't in the list, render an
-/// extra "Custom: <model>" button so a hand-edited value stays visible.
-fn model_selector(
+/// Chips for model lists of up to this many options; a dropdown beyond —
+/// same threshold as the popup's Options panel, so both pickers render
+/// identically for the same catalog.
+const CHIPS_UP_TO: usize = 4;
+
+/// Translation model picker built on the same adaptive [`OptionPicker`] as
+/// the popup's Options panel: chips for short catalogs, a
+/// dropdown beyond (OpenAI-compatible), plus a "Custom: …" entry that
+/// keeps hand-edited values visible. The picker entity persists on
+/// `DictState` and is reconciled from the live settings on every render
+/// (provider switch, popup edits, settings reload).
+fn model_picker_row(
     settings: &mdict_rs::settings::QuickTranslateSettings,
-    state: Entity<DictState>,
-) -> gpui::AnyElement {
-    use crate::components::qt_catalog;
-
-    let models = qt_catalog::models_for(settings.llm_provider);
-    let current = settings.model.as_str();
-    let in_list = models.iter().any(|(id, _)| *id == current);
-
-    let mut row = h_flex().gap(px(6.)).flex_wrap();
-
-    for (id, label) in models {
-        let selected = *id == current;
-        let id_owned = id.to_string();
-        row = row.child(provider_button(label, selected, {
-            let s = state.clone();
-            move |cx| {
-                s.update(cx, |st, cx| {
-                    st.quick_translate.model = id_owned.clone();
-                    st.save_settings(cx);
-                    st.reload_translator(cx);
-                });
-            }
-        }));
-    }
-
-    // Custom fallback: keep the current value visible if it's outside the catalog.
-    if !in_list && !current.is_empty() {
-        let label = format!("Custom: {current}");
-        // Already selected by definition (it's the active value); clicking is a no-op.
-        row = row.child(provider_button(&label, true, |_| {}));
-    }
-
-    labeled_row("Model", row.into_any_element())
-}
-
-/// TTS provider+model selector. Each preset commits model AND base_url
-/// together, then resets voice to the preset's first voice.
-fn tts_preset_selector(
-    settings: &mdict_rs::settings::QuickTranslateSettings,
-    state: Entity<DictState>,
-) -> gpui::AnyElement {
-    use crate::components::qt_catalog;
-
-    let presets = qt_catalog::TTS_PRESETS;
-    let active = qt_catalog::find_tts_preset(&settings.tts.model, &settings.tts.api_base_url);
-
-    let mut row = h_flex().gap(px(6.)).flex_wrap();
-
-    for (i, preset) in presets.iter().enumerate() {
-        let selected = active == Some(i);
-        let model = preset.model.to_string();
-        let base_url = preset.base_url.to_string();
-        let first_voice = preset
-            .voices
-            .first()
-            .map(|v| v.to_string())
-            .unwrap_or_default();
-        row = row.child(provider_button(preset.label, selected, {
-            let s = state.clone();
-            move |cx| {
-                s.update(cx, |st, cx| {
-                    st.quick_translate.tts.model = model.clone();
-                    st.quick_translate.tts.api_base_url = base_url.clone();
-                    st.quick_translate.tts.voice = first_voice.clone();
-                    st.save_settings(cx);
-                });
-            }
-        }));
-    }
-
-    // Custom fallback for hand-edited model/base_url combos.
-    if active.is_none() && !settings.tts.model.is_empty() {
-        let label = format!("Custom: {}", settings.tts.model);
-        row = row.child(provider_button(&label, true, |_| {}));
-    }
-
-    labeled_row("Provider", row.into_any_element())
-}
-
-/// TTS voice selector: segmented buttons from the active preset's voice list.
-/// Only shown when a known preset is active (otherwise there's no voice list).
-fn tts_voice_selector(
-    settings: &mdict_rs::settings::QuickTranslateSettings,
-    state: Entity<DictState>,
-) -> gpui::AnyElement {
-    use crate::components::qt_catalog;
-
-    let active = qt_catalog::find_tts_preset(&settings.tts.model, &settings.tts.api_base_url);
-
-    let mut content = h_flex().gap(px(6.)).flex_wrap();
-
-    if let Some(idx) = active {
-        let preset = &qt_catalog::TTS_PRESETS[idx];
-        let current = settings.tts.voice.as_str();
-        let in_list = preset.voices.contains(&current);
-
-        for voice in preset.voices {
-            let selected = *voice == current;
-            let v = voice.to_string();
-            content = content.child(provider_button(voice, selected, {
-                let s = state.clone();
-                move |cx| {
-                    s.update(cx, |st, cx| {
-                        st.quick_translate.tts.voice = v.clone();
-                        st.save_settings(cx);
-                    });
-                }
-            }));
-        }
-
-        if !in_list && !current.is_empty() {
-            let label = format!("Custom: {current}");
-            content = content.child(provider_button(&label, true, |_| {}));
-        }
-    } else {
-        // No known preset: show the current voice as read-only text.
-        content = content.child(
-            div()
-                .text_size(px(12.))
-                .text_color(colors::text_secondary())
-                .child(SharedString::from(settings.tts.voice.clone())),
-        );
-    }
-
-    labeled_row("Voice", content.into_any_element())
-}
-
-/// Target language selector: common-language buttons + "Custom…". When
-/// "Custom…" is active (or the current value isn't in the list), a free-text
-/// input appears below so the user can type any language.
-fn target_lang_selector(
-    settings: &mdict_rs::settings::QuickTranslateSettings,
-    state: Entity<DictState>,
-    _window: &mut Window,
+    state: &Entity<DictState>,
+    window: &mut Window,
     cx: &mut gpui::App,
 ) -> gpui::AnyElement {
+    use crate::components::option_picker::{OptionPicker, PickerProps};
+
+    let items = model_picker_items(settings, &state.read(cx).qt_openai_models);
+    let selected: Option<SharedString> =
+        (!settings.model.is_empty()).then(|| SharedString::from(settings.model.clone()));
+
+    if state.read(cx).qt_model_picker.is_none() {
+        let on_change_state = state.clone();
+        let picker = cx.new(|cx| {
+            OptionPicker::new(
+                PickerProps {
+                    id: "qt-model-picker".into(),
+                    items: items.clone(),
+                    selected: selected.clone(),
+                    chips_up_to: CHIPS_UP_TO,
+                    placeholder: Some("Select model…".into()),
+                    on_change: std::sync::Arc::new(move |id, _window, cx| {
+                        on_change_state.update(cx, |st, cx| {
+                            st.quick_translate.model = id.to_string();
+                            st.save_settings(cx);
+                            st.reload_translator(cx);
+                        });
+                    }),
+                },
+                window,
+                cx,
+            )
+        });
+        state.update(cx, |st, _| st.qt_model_picker = Some(picker));
+    }
+
+    let picker = state.read(cx).qt_model_picker.clone().unwrap();
+    picker.update(cx, |p, cx| {
+        p.set_selection(items, selected, window, cx);
+    });
+
+    labeled_row("Model", picker.into_any_element())
+}
+
+/// The model catalog for the active provider, with a "Custom: …" item
+/// appended when the current model isn't in it (mirrors the popup).
+/// For OpenAI-compatible, a loaded /models list replaces the hardcoded
+/// catalog.
+fn model_picker_items(
+    settings: &mdict_rs::settings::QuickTranslateSettings,
+    loaded: &[String],
+) -> Vec<crate::components::option_picker::PickerItem> {
+    use crate::components::option_picker::PickerItem;
+
+    // Catalog comes from the /models load only — no hardcoded list.
+    let mut items: Vec<PickerItem> = loaded
+        .iter()
+        .map(|m| PickerItem::new(m.clone(), m.clone()))
+        .collect();
+    let current = settings.model.as_str();
+    if !current.is_empty() && !items.iter().any(|i| i.id.as_ref() == current) {
+        items.push(PickerItem::new(
+            current.to_string(),
+            format!("Custom: {current}"),
+        ));
+    }
+    items
+}
+
+/// The published voices of the current TTS model, from the /models load.
+/// Empty when nothing was loaded or the model publishes no voice list.
+fn tts_voices_for(
+    settings: &mdict_rs::settings::QuickTranslateSettings,
+    state: &Entity<DictState>,
+    cx: &gpui::App,
+) -> Vec<String> {
+    let current = settings.tts.model.as_str();
+    state
+        .read(cx)
+        .qt_tts_models
+        .iter()
+        .find(|m| m.id == current)
+        .map(|m| m.voices.clone())
+        .unwrap_or_default()
+}
+
+/// TTS voice picker over the current model's published voices (same
+/// adaptive [`OptionPicker`] as the other rows). Commits the voice id and
+/// invalidates stale playing clips.
+fn tts_voice_picker_row(
+    settings: &mdict_rs::settings::QuickTranslateSettings,
+    state: &Entity<DictState>,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) -> gpui::AnyElement {
+    use crate::components::option_picker::{OptionPicker, PickerItem, PickerProps};
+
+    // Voices come only from the API (`supported_voices` of the selected
+    // model) — nothing hardcoded. A model that publishes none shows an
+    // empty picker; the current value stays reachable as "Custom: …".
+    let voices = tts_voices_for(settings, state, cx);
+    let mut items: Vec<PickerItem> = voices
+        .iter()
+        .map(|v| PickerItem::new(v.clone(), v.clone()))
+        .collect();
+    let current = settings.tts.voice.as_str();
+    if !current.is_empty() && !items.iter().any(|i| i.id.as_ref() == current) {
+        items.push(PickerItem::new(
+            current.to_string(),
+            format!("Custom: {current}"),
+        ));
+    }
+    let selected: Option<SharedString> = (!current.is_empty()).then(|| SharedString::from(current));
+
+    if state.read(cx).qt_tts_voice_picker.is_none() {
+        let on_change_state = state.clone();
+        let picker = cx.new(|cx| {
+            OptionPicker::new(
+                PickerProps {
+                    id: "qt-tts-voice-picker".into(),
+                    items: items.clone(),
+                    selected: selected.clone(),
+                    chips_up_to: CHIPS_UP_TO,
+                    placeholder: Some("Select voice…".into()),
+                    on_change: std::sync::Arc::new(move |id, _window, cx| {
+                        on_change_state.update(cx, |st, cx| {
+                            st.quick_translate.tts.voice = id.to_string();
+                            st.save_settings(cx);
+                            st.invalidate_tts_clips_for_settings(None);
+                        });
+                    }),
+                },
+                window,
+                cx,
+            )
+        });
+        state.update(cx, |st, _| st.qt_tts_voice_picker = Some(picker));
+    }
+
+    let picker = state.read(cx).qt_tts_voice_picker.clone().unwrap();
+    picker.update(cx, |p, cx| {
+        p.set_selection(items, selected, window, cx);
+    });
+
+    labeled_row("TTS Voice", picker.into_any_element())
+}
+
+/// TTS model picker built on the same adaptive [`OptionPicker`] as the
+/// popup's Options panel. Catalog: a TTS-filtered /models load when
+/// available, else the hardcoded OpenAI TTS fallback list — plus a
+/// "Custom: …" item so a hand-typed model stays visible. The picker entity
+/// persists on `DictState` and is reconciled from the live settings.
+fn tts_model_picker_row(
+    settings: &mdict_rs::settings::QuickTranslateSettings,
+    state: &Entity<DictState>,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) -> gpui::AnyElement {
+    use crate::components::option_picker::{OptionPicker, PickerItem, PickerProps};
+
+    let loaded = state.read(cx).qt_tts_models.clone();
+    // Catalog: the TTS-filtered /models load when it found models, else
+    // the curated fallback (endpoints like OpenRouter serve TTS without
+    // listing it in /models).
+    let mut items: Vec<PickerItem> = if !loaded.is_empty() {
+        loaded
+            .iter()
+            .map(|m| PickerItem::new(m.id.clone(), m.id.clone()))
+            .collect()
+    } else {
+        crate::components::qt_catalog::OPENAI_TTS_MODELS
+            .iter()
+            .map(|&id| PickerItem::new(id, id))
+            .collect()
+    };
+    let current = settings.tts.model.as_str();
+    if !current.is_empty() && !items.iter().any(|i| i.id.as_ref() == current) {
+        items.push(PickerItem::new(
+            current.to_string(),
+            format!("Custom: {current}"),
+        ));
+    }
+    let selected: Option<SharedString> = (!current.is_empty()).then(|| SharedString::from(current));
+
+    if state.read(cx).qt_tts_model_picker.is_none() {
+        let on_change_state = state.clone();
+        let picker = cx.new(|cx| {
+            OptionPicker::new(
+                PickerProps {
+                    id: "qt-tts-model-picker".into(),
+                    items: items.clone(),
+                    selected: selected.clone(),
+                    chips_up_to: CHIPS_UP_TO,
+                    placeholder: Some("Select TTS model…".into()),
+                    on_change: std::sync::Arc::new(move |id, _window, cx| {
+                        on_change_state.update(cx, |st, cx| {
+                            st.quick_translate.tts.model = id.to_string();
+                            // A model without a published voice list takes
+                            // its default voice — drop the stale one.
+                            let voiceless = st
+                                .qt_tts_models
+                                .iter()
+                                .find(|m| m.id == id)
+                                .map(|m| m.voices.is_empty())
+                                .unwrap_or(false);
+                            if voiceless {
+                                st.quick_translate.tts.voice = String::new();
+                            }
+                            st.save_settings(cx);
+                        });
+                    }),
+                },
+                window,
+                cx,
+            )
+        });
+        state.update(cx, |st, _| st.qt_tts_model_picker = Some(picker));
+    }
+
+    let picker = state.read(cx).qt_tts_model_picker.clone().unwrap();
+    picker.update(cx, |p, cx| {
+        p.set_selection(items, selected, window, cx);
+    });
+
+    labeled_row("TTS Model", picker.into_any_element())
+}
+
+/// Target language picker built on the same adaptive [`OptionPicker`] as
+/// the popup's Options panel: the 13-language catalog collapses into a
+/// dropdown, and a hand-edited language stays visible as "Custom: …".
+/// The picker entity persists on `DictState` and is reconciled from the
+/// live settings on every render.
+fn target_lang_picker_row(
+    settings: &mdict_rs::settings::QuickTranslateSettings,
+    state: &Entity<DictState>,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) -> gpui::AnyElement {
+    use crate::components::option_picker::{OptionPicker, PickerItem, PickerProps};
     use crate::components::qt_catalog;
 
-    let current = settings.target_lang.as_str();
-    let in_list = qt_catalog::TARGET_LANGS.contains(&current);
-
-    let mut buttons = h_flex().gap(px(6.)).flex_wrap();
-    for lang in qt_catalog::TARGET_LANGS {
-        let selected = *lang == current;
-        let l = lang.to_string();
-        buttons = buttons.child(provider_button(lang, selected, {
-            let s = state.clone();
-            move |cx| {
-                s.update(cx, |st, cx| {
-                    st.quick_translate.target_lang = l.clone();
-                    st.save_settings(cx);
-                });
-            }
-        }));
-    }
-
-    // "Custom…" button: selected whenever the current value isn't a known language.
-    let custom_selected = !in_list;
-    buttons = buttons.child(provider_button("Custom…", custom_selected, {
-        let s = state.clone();
-        move |cx| {
-            // Switch to a blank custom value if currently on a known language.
-            s.update(cx, |st, cx| {
-                if qt_catalog::TARGET_LANGS.contains(&st.quick_translate.target_lang.as_str())
-                    || st.quick_translate.target_lang.is_empty()
-                {
-                    st.quick_translate.target_lang = String::new();
-                    st.save_settings(cx);
-                }
-            });
+    let items: Vec<PickerItem> = {
+        let mut items: Vec<PickerItem> = qt_catalog::TARGET_LANGS
+            .iter()
+            .map(|&lang| PickerItem::new(lang, lang))
+            .collect();
+        let current = settings.target_lang.as_str();
+        if !current.is_empty() && !items.iter().any(|i| i.id.as_ref() == current) {
+            items.push(PickerItem::new(
+                current.to_string(),
+                format!("Custom: {current}"),
+            ));
         }
-    }));
+        items
+    };
+    let selected: Option<SharedString> = (!settings.target_lang.is_empty())
+        .then(|| SharedString::from(settings.target_lang.clone()));
 
-    let mut block = v_flex().gap(px(6.)).child(buttons);
-
-    // Reveal the free-text input only in custom mode.
-    if !in_list {
-        let input = input_row(
-            "Custom",
-            &state.read(cx).qt_target_lang_input.clone().unwrap(),
-            false,
-            cx,
-        );
-        block = block.child(input);
+    if state.read(cx).qt_target_lang_picker.is_none() {
+        let on_change_state = state.clone();
+        let picker = cx.new(|cx| {
+            OptionPicker::new(
+                PickerProps {
+                    id: "qt-target-lang-picker".into(),
+                    items: items.clone(),
+                    selected: selected.clone(),
+                    chips_up_to: CHIPS_UP_TO,
+                    placeholder: Some("Select language…".into()),
+                    on_change: std::sync::Arc::new(move |id, _window, cx| {
+                        on_change_state.update(cx, |st, cx| {
+                            st.quick_translate.target_lang = id.to_string();
+                            st.save_settings(cx);
+                        });
+                    }),
+                },
+                window,
+                cx,
+            )
+        });
+        state.update(cx, |st, _| st.qt_target_lang_picker = Some(picker));
     }
 
-    labeled_row("Target Language", block.into_any_element())
+    let picker = state.read(cx).qt_target_lang_picker.clone().unwrap();
+    picker.update(cx, |p, cx| {
+        p.set_selection(items, selected, window, cx);
+    });
+
+    labeled_row("Target Language", picker.into_any_element())
 }

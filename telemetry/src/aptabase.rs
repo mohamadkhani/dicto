@@ -8,10 +8,9 @@
 //! Wire format follows Aptabase's documented API: an array of event bodies,
 //! each with `timestamp`, `sessionId`, `eventName`, `systemProps`, `props`.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
-
-use std::collections::BTreeMap;
 
 use serde::{Serialize, Serializer};
 use tokio::runtime::Runtime;

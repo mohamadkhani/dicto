@@ -1,47 +1,46 @@
-//! The inline Options panel for the popup: adaptive pickers for provider,
-//! model, target language, TTS preset, and voice. Each picker mutates
+//! The inline Options panel for the popup: adaptive pickers for model,
+//! target language, TTS preset, and voice. Each picker mutates
 //! `DictState`, persists, and — for translation-affecting changes — reloads
 //! the translator.
 //!
 //! Every row is a general [`OptionPicker`]: chips while its catalog has up to
-//! [`CHIPS_UP_TO`] options (provider, TTS presets, Anthropic's models), a
-//! dropdown beyond it (13 target languages, OpenAI models, preset voices).
-//! The panel is a stateful entity so the pickers outlive single frames;
-//! confirmation callbacks write back into `DictState`, and
-//! [`OptionsPanel::sync`] reconciles every picker from the live settings on
-//! the view's poll tick — refreshing dependent catalogs (model list after a
-//! provider switch, voice list after a TTS switch) and keeping the popup in
-//! step with edits made in the main window's settings while it is open.
+//! [`CHIPS_UP_TO`] options (TTS presets), a dropdown beyond it (13 target
+//! languages, models, preset voices). The panel is a stateful entity so the
+//! pickers outlive single frames; confirmation callbacks write back into
+//! `DictState`, and [`OptionsPanel::sync`] reconciles every picker from the
+//! live settings on the view's poll tick — refreshing dependent catalogs
+//! (voice list after a TTS switch) and keeping the popup in step with edits
+//! made in the main window's settings while it is open.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::ease_in_out;
 use gpui::{
-    Animation, AnimationExt as _, AppContext as _, Context, Entity, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Transformation, Window, div, percentage, px, svg,
+    Animation, AnimationExt as _, App, AppContext as _, AsyncApp, Context, Entity,
+    InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Transformation, Window, div, percentage,
+    prelude::FluentBuilder as _, px, svg,
 };
 use gpui_component::{h_flex, v_flex};
-use mdict_rs::settings::{LlmProvider, QuickTranslateSettings};
+use mdict_rs::settings::QuickTranslateSettings;
 
 use crate::components::option_picker::{OptionPicker, PickerItem, PickerProps};
 use crate::components::qt_catalog;
 use crate::{colors, state::DictState};
 
 /// Pickers render chips for lists of up to this many options; longer
-/// catalogs (13 target languages, OpenAI models, preset voices) collapse
+/// catalogs (13 target languages, models, preset voices) collapse
 /// into dropdowns.
 const CHIPS_UP_TO: usize = 4;
 
 /// The settings fields the pickers are built from. `sync` compares this key
 /// to decide whether the catalogs need rebuilding (`QuickTranslateSettings`
 /// has no `PartialEq`).
-type SettingsKey = (LlmProvider, String, String, String, String, String);
+type SettingsKey = (String, String, String, String, String);
 
 fn settings_key(s: &QuickTranslateSettings) -> SettingsKey {
     (
-        s.llm_provider,
         s.model.clone(),
         s.target_lang.clone(),
         s.tts.model.clone(),
@@ -54,24 +53,17 @@ fn settings_key(s: &QuickTranslateSettings) -> SettingsKey {
 // Per-picker catalogs, built from the current settings
 // ---------------------------------------------------------------------------
 
-fn provider_id(provider: LlmProvider) -> &'static str {
-    match provider {
-        LlmProvider::Anthropic => "anthropic",
-        LlmProvider::OpenAiCompatible => "openai",
-    }
-}
-
-fn provider_items() -> Vec<PickerItem> {
-    vec![
-        PickerItem::new("anthropic", "Anthropic"),
-        PickerItem::new("openai", "OpenAI-compatible"),
-    ]
-}
-
-fn model_items(settings: &QuickTranslateSettings) -> Vec<PickerItem> {
-    let mut items = qt_catalog::models_for(settings.llm_provider)
+fn model_items(
+    state: &Entity<DictState>,
+    settings: &QuickTranslateSettings,
+    cx: &App,
+) -> Vec<PickerItem> {
+    // Catalog comes from the /models load only — no hardcoded list.
+    let mut items: Vec<PickerItem> = state
+        .read(cx)
+        .qt_openai_models
         .iter()
-        .map(|&(id, label)| PickerItem::new(id, label))
+        .map(|m| PickerItem::new(m.clone(), m.clone()))
         .collect();
     push_custom(&mut items, &settings.model);
     items
@@ -83,43 +75,6 @@ fn target_items(settings: &QuickTranslateSettings) -> Vec<PickerItem> {
         .map(|&lang| PickerItem::new(lang, lang))
         .collect();
     push_custom(&mut items, &settings.target_lang);
-    items
-}
-
-/// The TTS picker's value: the active preset's label, or the raw model for a
-/// hand-edited (model, base_url) pair.
-fn tts_id(settings: &QuickTranslateSettings) -> String {
-    match qt_catalog::find_tts_preset(&settings.tts.model, &settings.tts.api_base_url) {
-        Some(ix) => qt_catalog::TTS_PRESETS[ix].label.to_string(),
-        None => settings.tts.model.clone(),
-    }
-}
-
-fn tts_items(settings: &QuickTranslateSettings) -> Vec<PickerItem> {
-    let mut items = qt_catalog::TTS_PRESETS
-        .iter()
-        .map(|preset| PickerItem::new(preset.label, preset.label))
-        .collect();
-    if let Some(id) = opt(&tts_id(settings)) {
-        push_custom(&mut items, &id);
-    }
-    items
-}
-
-fn voice_items(settings: &QuickTranslateSettings) -> Vec<PickerItem> {
-    let mut items =
-        match qt_catalog::find_tts_preset(&settings.tts.model, &settings.tts.api_base_url) {
-            Some(ix) => qt_catalog::TTS_PRESETS[ix]
-                .voices
-                .iter()
-                .map(|&voice| PickerItem::new(voice, voice))
-                .collect(),
-            // Hand-edited TTS config: no preset voices to offer.
-            None => Vec::new(),
-        };
-    if let Some(voice) = opt(&settings.tts.voice) {
-        push_custom(&mut items, &voice);
-    }
     items
 }
 
@@ -151,22 +106,124 @@ fn commit(state: &Entity<DictState>, cx: &mut gpui::App, mutate: impl FnOnce(&mu
     });
 }
 
+/// The TTS model catalog: a TTS-filtered /models load when available, else
+/// the hardcoded OpenAI TTS fallback — plus a "Custom: …" item for
+/// hand-edited values.
+fn tts_model_items(
+    settings: &QuickTranslateSettings,
+    loaded: Vec<dicto_translate::openai::TtsModel>,
+) -> Vec<PickerItem> {
+    // Catalog: the TTS-filtered /models load when it found models, else
+    // the curated fallback.
+    let mut items: Vec<PickerItem> = if !loaded.is_empty() {
+        loaded
+            .iter()
+            .map(|m| PickerItem::new(m.id.clone(), m.id.clone()))
+            .collect()
+    } else {
+        qt_catalog::OPENAI_TTS_MODELS
+            .iter()
+            .map(|&id| PickerItem::new(id, id))
+            .collect()
+    };
+    let current = settings.tts.model.as_str();
+    if !current.is_empty() && !items.iter().any(|i| i.id.as_ref() == current) {
+        items.push(PickerItem::new(
+            current.to_string(),
+            format!("Custom: {current}"),
+        ));
+    }
+    items
+}
+
+/// The voices of the selected TTS model, from the /models load
+/// (`supported_voices`) — nothing hardcoded. The current value stays
+/// reachable as "Custom: …".
+fn voice_items(
+    state: &Entity<DictState>,
+    settings: &QuickTranslateSettings,
+    cx: &App,
+) -> Vec<PickerItem> {
+    let current_model = settings.tts.model.as_str();
+    let mut items: Vec<PickerItem> = state
+        .read(cx)
+        .qt_tts_models
+        .iter()
+        .find(|m| m.id == current_model)
+        .map(|m| {
+            m.voices
+                .iter()
+                .map(|v| PickerItem::new(v.clone(), v.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let current = settings.tts.voice.as_str();
+    if !current.is_empty() && !items.iter().any(|i| i.id.as_ref() == current) {
+        items.push(PickerItem::new(
+            current.to_string(),
+            format!("Custom: {current}"),
+        ));
+    }
+    items
+}
+
+/// One-shot per app run: fetch chat models (for the Model picker) and
+/// TTS models + their published voices (for the TTS Model/Voice pickers)
+/// from the configured endpoints, in the background. Silent on failure —
+/// the pickers keep their fallback lists / current values.
+fn autoload_models(state: &Entity<DictState>, cx: &mut Context<OptionsPanel>) {
+    // Mark immediately so concurrent sync ticks don't double-spawn.
+    state.update(cx, |st, _| st.qt_models_autoloaded = true);
+
+    let quick = state.read(cx).quick_translate.clone();
+    let (t_key, t_base) = (quick.api_key.clone(), quick.api_base_url.clone());
+    let (v_key, v_base) = (quick.tts.api_key.clone(), quick.tts.api_base_url.clone());
+    let state = state.clone();
+
+    cx.spawn(async move |this, cx: &mut AsyncApp| {
+        let bg = cx.background_executor();
+        let chat =
+            bg.spawn(async move { dicto_translate::openai::list_models(&t_key, &t_base).ok() });
+        let tts =
+            bg.spawn(async move { dicto_translate::openai::list_tts_models(&v_key, &v_base).ok() });
+        let (chat, tts) = (chat.await, tts.await);
+
+        cx.update_entity(&state, |st, cx| {
+            if let Some(models) = chat
+                && !models.is_empty()
+            {
+                st.qt_openai_models = models;
+            }
+            if let Some(models) = tts
+                && !models.is_empty()
+            {
+                st.qt_tts_models = models;
+            }
+            cx.notify();
+        });
+        let _ = this;
+    })
+    .detach();
+}
+
 // ---------------------------------------------------------------------------
 // The panel entity
 // ---------------------------------------------------------------------------
 
-/// The inline Options panel: adaptive pickers for provider, model, target
-/// language, TTS preset, and voice.
+/// The inline Options panel: adaptive pickers for model and target
+/// language, plus free-text TTS model/voice inputs.
 pub(crate) struct OptionsPanel {
     state: Entity<DictState>,
-    provider: Entity<OptionPicker>,
     model: Entity<OptionPicker>,
     target: Entity<OptionPicker>,
-    tts: Entity<OptionPicker>,
-    voice: Entity<OptionPicker>,
+    tts_model: Entity<OptionPicker>,
+    tts_voice: Entity<OptionPicker>,
     /// Settings snapshot the pickers were last built from; [`Self::sync`]
     /// rebuilds when the live settings diverge.
     synced: SettingsKey,
+    /// Length of the shared TTS /models load at last sync — its change
+    /// alone must also trigger a picker rebuild.
+    synced_loaded: usize,
 }
 
 impl OptionsPanel {
@@ -177,38 +234,9 @@ impl OptionsPanel {
     ) -> Self {
         let settings = state.read(cx).quick_translate.clone();
 
-        let provider = Self::picker(
-            "qt-provider",
-            provider_items(),
-            Some(provider_id(settings.llm_provider).into()),
-            None,
-            {
-                let state = state.clone();
-                move |id, _window, cx| {
-                    let provider = match id {
-                        "anthropic" => LlmProvider::Anthropic,
-                        _ => LlmProvider::OpenAiCompatible,
-                    };
-                    // Switching provider swaps the model catalog: commit the
-                    // first model of the new list so the model picker never
-                    // shows a stale choice.
-                    let first_model = qt_catalog::models_for(provider)
-                        .first()
-                        .map(|&(id, _)| id.to_string())
-                        .unwrap_or_default();
-                    commit(&state, cx, |st| {
-                        st.quick_translate.llm_provider = provider;
-                        st.quick_translate.model = first_model;
-                    });
-                }
-            },
-            window,
-            cx,
-        );
-
         let model = Self::picker(
             "qt-model",
-            model_items(&settings),
+            model_items(&state, &settings, cx),
             opt(&settings.model),
             None,
             {
@@ -238,55 +266,50 @@ impl OptionsPanel {
             cx,
         );
 
-        let tts = Self::picker(
-            "qt-tts",
-            tts_items(&settings),
-            opt(&tts_id(&settings)),
-            None,
+        // TTS model: adaptive picker over the TTS-filtered /models load
+        // (fallback: hardcoded OpenAI TTS list). Voice: free text — no API
+        // lists voices.
+        let tts_model = Self::picker(
+            "qt-tts-model",
+            tts_model_items(&settings, state.read(cx).qt_tts_models.clone()),
+            opt(&settings.tts.model),
+            Some("Select TTS model…"),
             {
                 let state = state.clone();
                 move |id, _window, cx| {
-                    // The picker's value is the preset label; a "Custom: …"
-                    // item (a raw model id) matches no preset and is
-                    // display-only.
-                    let Some(preset) = qt_catalog::TTS_PRESETS
-                        .iter()
-                        .find(|preset| preset.label == id)
-                    else {
-                        return;
-                    };
-                    let model = preset.model.to_string();
-                    let base_url = preset.base_url.to_string();
-                    let first_voice = preset
-                        .voices
-                        .first()
-                        .map(|v| v.to_string())
-                        .unwrap_or_default();
                     commit(&state, cx, |st| {
-                        st.quick_translate.tts.model = model;
-                        st.quick_translate.tts.api_base_url = base_url;
-                        st.quick_translate.tts.voice = first_voice;
+                        st.quick_translate.tts.model = id.to_string();
+                        // A model without a published voice list takes its
+                        // default voice — drop the stale one.
+                        let voiceless = st
+                            .qt_tts_models
+                            .iter()
+                            .find(|m| m.id == id)
+                            .map(|m| m.voices.is_empty())
+                            .unwrap_or(false);
+                        if voiceless {
+                            st.quick_translate.tts.voice = String::new();
+                        }
                     });
-                    // A clip loaded with the old voice/model is no longer
-                    // correct — stop it (if playing/paused) so the new
-                    // settings take effect on the next press.
+                    // A clip loaded with the old model is no longer correct.
                     state.update(cx, |st, _cx| st.invalidate_tts_clips_for_settings(None));
                 }
             },
             window,
             cx,
         );
-
-        let voice = Self::picker(
-            "qt-voice",
-            voice_items(&settings),
+        let tts_voice = Self::picker(
+            "qt-tts-voice",
+            voice_items(&state, &settings, cx),
             opt(&settings.tts.voice),
             Some("Select voice…"),
             {
                 let state = state.clone();
                 move |id, _window, cx| {
-                    let voice = id.to_string();
-                    commit(&state, cx, |st| st.quick_translate.tts.voice = voice);
+                    commit(&state, cx, |st| {
+                        st.quick_translate.tts.voice = id.to_string();
+                    });
+                    // A clip loaded with the old voice is no longer correct.
                     state.update(cx, |st, _cx| st.invalidate_tts_clips_for_settings(None));
                 }
             },
@@ -294,14 +317,15 @@ impl OptionsPanel {
             cx,
         );
 
+        let synced_loaded = state.read(cx).qt_tts_models.len();
         Self {
             state,
-            provider,
             model,
             target,
-            tts,
-            voice,
+            tts_model,
+            tts_voice,
             synced: settings_key(&settings),
+            synced_loaded,
         }
     }
 
@@ -333,29 +357,46 @@ impl OptionsPanel {
     /// Reconcile every picker with the live settings. Called on the view's
     /// poll tick; skips work while the settings are unchanged.
     pub(crate) fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Kick the once-per-session models+voices autoload before the
+        // unchanged-check: the popup has no manual load button, and without
+        // this the model/voice pickers would stay on their fallback lists
+        // forever.
+        if !self.state.read(cx).qt_models_autoloaded {
+            autoload_models(&self.state, cx);
+        }
+
         let settings = self.state.read(cx).quick_translate.clone();
         let key = settings_key(&settings);
-        if key == self.synced {
+        let loaded_key = self.state.read(cx).qt_tts_models.len();
+        // The TTS voice input is its own source of truth (its edits commit
+        // straight into settings) — only the pickers need reconciliation.
+        // The TTS model catalog also changes when a /models load lands in
+        // the shared DictState, so key on its length too.
+        if key == self.synced && loaded_key == self.synced_loaded {
             return;
         }
         self.synced = key;
+        self.synced_loaded = loaded_key;
 
         for (picker, items, selected) in [
             (
-                &self.provider,
-                provider_items(),
-                Some(SharedString::from(provider_id(settings.llm_provider))),
+                &self.model,
+                model_items(&self.state, &settings, cx),
+                opt(&settings.model),
             ),
-            (&self.model, model_items(&settings), opt(&settings.model)),
             (
                 &self.target,
                 target_items(&settings),
                 opt(&settings.target_lang),
             ),
-            (&self.tts, tts_items(&settings), opt(&tts_id(&settings))),
             (
-                &self.voice,
-                voice_items(&settings),
+                &self.tts_model,
+                tts_model_items(&settings, self.state.read(cx).qt_tts_models.clone()),
+                opt(&settings.tts.model),
+            ),
+            (
+                &self.tts_voice,
+                voice_items(&self.state, &settings, cx),
                 opt(&settings.tts.voice),
             ),
         ] {
@@ -367,7 +408,7 @@ impl OptionsPanel {
 }
 
 impl Render for OptionsPanel {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Natural height, like the design: the panel stacks in flow below the
         // footer toggle; the card's flexing body absorbs the growth.
         v_flex()
@@ -379,14 +420,32 @@ impl Render for OptionsPanel {
                 v_flex()
                     .gap(px(8.))
                     .p(px(10.))
-                    .child(field("Provider", self.provider.clone().into_any_element()))
                     .child(field("Model", self.model.clone().into_any_element()))
                     .child(field("Target", self.target.clone().into_any_element()))
                     .child(divider())
-                    .child(field("TTS", self.tts.clone().into_any_element()))
-                    .child(field("Voice", self.voice.clone().into_any_element())),
+                    .child(field(
+                        "TTS Model",
+                        self.tts_model.clone().into_any_element(),
+                    ))
+                    // Hide Voice entirely for models that publish no voice
+                    // list — they use their default voice.
+                    .when(tts_model_has_voices_impl(self.state.read(cx)), |row| {
+                        row.child(field("Voice", self.tts_voice.clone().into_any_element()))
+                    }),
             )
     }
+}
+
+/// Whether the currently selected TTS model publishes a `supported_voices`
+/// list. Voiceless models use their default voice, so the Voice row is
+/// hidden for them.
+fn tts_model_has_voices_impl(state: &DictState) -> bool {
+    state
+        .qt_tts_models
+        .iter()
+        .find(|m| m.id == state.quick_translate.tts.model)
+        .map(|m| !m.voices.is_empty())
+        .unwrap_or(false)
 }
 
 /// Label (small) + control, side by side like the design's

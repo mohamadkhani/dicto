@@ -10,13 +10,13 @@ use std::sync::{Arc, RwLock};
 use fst::automaton::{AlwaysMatch, Levenshtein, Str as FstStr};
 use fst::{Automaton, IntoStreamer, Map, MapBuilder, Streamer};
 use memmap2::Mmap;
-use tracing::{info, warn};
-
-use crate::dictionary::Dictionary;
 use parser::header::{header_stylesheet_to_css, parse_attrs};
 use parser::mdd::{Mdd, normalize_path};
 use parser::mdx::Mdx;
 use parser::recordblock::decompress_record_block;
+use tracing::{info, warn};
+
+use crate::dictionary::Dictionary;
 
 // ── offset record (24 bytes per entry) ───────────────────────────────────────
 
