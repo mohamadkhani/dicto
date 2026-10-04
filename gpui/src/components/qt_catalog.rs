@@ -1,18 +1,16 @@
-//! Hardcoded, verified option catalogs for the Quick Translate settings UI.
+//! Option catalogs for the Quick Translate settings UI.
 //!
-//! Every model ID, base URL, and voice listed here has been confirmed working
-//! by hitting the provider's API (curl). Keeping these curated — instead of
-//! free-text inputs — prevents invalid configurations (e.g. an OpenAI voice on
-//! a Grok model, or a non-existent model ID) that previously caused silent
-//! fallbacks with no user-visible guidance.
+//! Translation and TTS models are NOT hardcoded here: both pickers load
+//! their catalogs live from the endpoint's `/models` API
+//! (`dicto_translate::openai::list_models` / `list_tts_models`), filtered
+//! to chat-capable and speech-capable models respectively. A user's current
+//! setting always stays visible in its picker as a "Custom: …" entry.
 //!
-//! The persisted settings (`QuickTranslateSettings` / `TtsSettings`) stay as
-//! plain strings; this module only constrains *which* strings the UI offers.
-//!
-//! Translation models are loaded live from the endpoint's `/models` API
-//! (`dicto_translate::openai::list_models`, filtered to chat-capable
-//! models); a user's current setting always stays visible in its picker as
-//! a "Custom: …" entry.
+//! The one exception is [`OPENAI_TTS_MODELS`]: a fallback list used when an
+//! endpoint serves TTS models without listing them in /models (OpenRouter
+//! does exactly that — verified 2026-10). The persisted settings
+//! (`QuickTranslateSettings` / `TtsSettings`) stay as plain strings; this
+//! module only constrains *which* strings the UI offers.
 
 // ---------------------------------------------------------------------------
 // TTS: fallback models
