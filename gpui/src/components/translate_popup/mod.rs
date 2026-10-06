@@ -8,6 +8,7 @@
 //! `options.rs` the inline Options panel, and `playback.rs` the play button
 //! + seek bar.
 
+pub(crate) mod lookup;
 pub(crate) mod options;
 pub(crate) mod playback;
 pub(crate) mod sections;
@@ -109,7 +110,7 @@ pub(crate) fn fitted_height(body_natural: f32, footer_height: f32) -> f32 {
 }
 
 /// A zero-height probe that records its own window-space Y during paint.
-fn probe(y: Rc<Cell<Option<f32>>>) -> gpui::AnyElement {
+pub(crate) fn probe(y: Rc<Cell<Option<f32>>>) -> gpui::AnyElement {
     div()
         .w_full()
         .h(px(0.))
@@ -141,8 +142,23 @@ pub(crate) fn estimated_window_height(state: Option<&PopupState>) -> f32 {
     const SPINNER: f32 = 30.;
     const BANNER: f32 = 46.; // 2-line error/warning banner
     const FOOTER: f32 = 33.; // toggle row + its top border
+    // Word Lookup states
+    const WORD: f32 = 30.; // word header row (20px text + 26px buttons, 2px slack)
+    const TABS: f32 = 30.; // dictionary tab strip
+    const DEFINITION: f32 = 240.; // definition body (grows to MAX via probes)
+    const LOOKUP_FOOTER: f32 = 48.; // action row (buttons + 8px paddings + border)
 
     let original_section = HEADER + GAP + ORIGINAL + GAP + DIVIDER;
+    let is_lookup = matches!(
+        state,
+        Some(
+            PS::LookupLoading { .. }
+                | PS::LookupReady { .. }
+                | PS::LookupNotFound { .. }
+                | PS::LookupDisabled
+                | PS::LookupError { .. }
+        )
+    );
     let (body, row) = match state {
         // original + "Translation" header + translation text
         Some(PS::Ready { .. }) => (
@@ -154,9 +170,21 @@ pub(crate) fn estimated_window_height(state: Option<&PopupState>) -> f32 {
         // Too long: warning banner, and NO Translate row (nothing to do).
         Some(PS::TooLong { .. }) => (original_section + GAP + BANNER, None),
         Some(PS::Idle { .. }) | None => (original_section, Some(ROW)),
+        // Word Lookup states: word header + (tabs + definition | spinner |
+        // not-found note). Their footer is the action row (LOOKUP_FOOTER).
+        Some(PS::LookupLoading { .. }) => (WORD + GAP + SPINNER, None),
+        Some(PS::LookupReady { results, .. }) => {
+            let tabs = if results.len() > 1 { TABS + GAP } else { 0. };
+            (WORD + GAP + tabs + DEFINITION, None)
+        }
+        Some(PS::LookupNotFound { .. }) => (WORD + GAP + BANNER + GAP + ROW, None),
+        // Hint states: a note + (for Disabled) an Enable button, no footer.
+        Some(PS::LookupDisabled) => (WORD + GAP + BANNER + GAP + ROW, None),
+        Some(PS::LookupError { .. }) => (BANNER, None),
     };
     let row = row.map(|r| GAP + r).unwrap_or(0.);
-    (CHROME + body + row + FOOTER).clamp(MIN_POPUP_H, MAX_POPUP_H)
+    let footer = if is_lookup { LOOKUP_FOOTER } else { FOOTER };
+    (CHROME + body + row + footer).clamp(MIN_POPUP_H, MAX_POPUP_H)
 }
 
 /// State of the translation popup.
@@ -179,6 +207,21 @@ pub enum PopupState {
     /// Selection exceeds the 10,000-char limit. A warning, not an error —
     /// nothing failed; the user just needs a smaller selection.
     TooLong { original: String },
+    /// Word Lookup: querying the local dictionaries in the background.
+    LookupLoading { word: String },
+    /// Word Lookup: at least one dictionary had a hit. `active` selects the
+    /// dictionary tab.
+    LookupReady {
+        word: String,
+        results: Vec<crate::state::DictResult>,
+        active: usize,
+    },
+    /// Word Lookup: no dictionary had a hit — offer "Translate".
+    LookupNotFound { word: String },
+    /// Word Lookup: the feature is off — offer a one-click Enable.
+    LookupDisabled,
+    /// Word Lookup: the selection could not be read.
+    LookupError { message: String },
 }
 
 impl PopupState {
@@ -190,7 +233,75 @@ impl PopupState {
             | PopupState::Ready { original, .. }
             | PopupState::Error { original, .. }
             | PopupState::TooLong { original } => original,
+            PopupState::LookupLoading { word }
+            | PopupState::LookupReady { word, .. }
+            | PopupState::LookupNotFound { word } => word,
+            PopupState::LookupDisabled | PopupState::LookupError { .. } => "",
         }
+    }
+
+    /// Whether this state renders the Word Lookup UI (as opposed to the
+    /// translate UI). The view uses this to pick the footer and to decide
+    /// whether the Original editor needs syncing.
+    pub fn is_lookup(&self) -> bool {
+        matches!(
+            self,
+            PopupState::LookupLoading { .. }
+                | PopupState::LookupReady { .. }
+                | PopupState::LookupNotFound { .. }
+                | PopupState::LookupDisabled
+                | PopupState::LookupError { .. }
+        )
+    }
+
+    /// Whether the lookup state carries a footer action row (Open in
+    /// Dicto / Translate). Hint states (disabled / read failure) don't.
+    pub fn lookup_has_actions(&self) -> bool {
+        matches!(
+            self,
+            PopupState::LookupLoading { .. }
+                | PopupState::LookupReady { .. }
+                | PopupState::LookupNotFound { .. }
+        )
+    }
+
+    /// The popup window's title-strip label.
+    pub fn title(&self) -> &'static str {
+        if self.is_lookup() {
+            "Word Lookup"
+        } else {
+            "Quick Translate"
+        }
+    }
+}
+
+/// Map a lookup `PopupState` variant onto the engine's `LookupState` for the
+/// lookup UI builders. Only ever called with a lookup variant at the matched
+/// call site; the fallback arm keeps the function total.
+fn lookup_state_of(ps: &PopupState) -> crate::word_lookup::LookupState {
+    match ps {
+        PopupState::LookupLoading { word } => {
+            crate::word_lookup::LookupState::Loading { word: word.clone() }
+        }
+        PopupState::LookupReady {
+            word,
+            results,
+            active,
+        } => crate::word_lookup::LookupState::Ready {
+            word: word.clone(),
+            results: results.clone(),
+            active: *active,
+        },
+        PopupState::LookupNotFound { word } => {
+            crate::word_lookup::LookupState::NotFound { word: word.clone() }
+        }
+        PopupState::LookupDisabled => crate::word_lookup::LookupState::Disabled,
+        PopupState::LookupError { message } => crate::word_lookup::LookupState::Error {
+            message: message.clone(),
+        },
+        other => crate::word_lookup::LookupState::Loading {
+            word: other.original().to_string(),
+        },
     }
 }
 
@@ -294,12 +405,14 @@ pub fn translate_popup(state_entity: &Entity<DictState>, props: PopupProps) -> g
         .rounded(px(10.))
         .border_1()
         .border_color(colors::border())
-        // FREE-AREA DRAG: a mouse-down that reaches the frame (title strip,
-        // padding, gaps, section labels — every interactive subtree stops
-        // propagation first) moves the window, and also keeps the backdrop
-        // from dismissing.
-        .on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
-            window.start_window_move();
+        // Bubble-stop: a press inside the card must never reach the root
+        // backdrop, whose click-outside handler dismisses the popup. Drag
+        // is bound to the TITLE STRIP ONLY (below): a free-area drag
+        // (whole card) made the compositor grab the pointer on any
+        // mouse-down that reached the frame — including presses on the
+        // definition pills — so the release never arrived and the click
+        // silently died ("sometimes it plays").
+        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
             cx.stop_propagation();
         })
         // Title strip attached to the window's top border, like a normal
@@ -308,6 +421,13 @@ pub fn translate_popup(state_entity: &Entity<DictState>, props: PopupProps) -> g
         // folded into the chrome constant (TITLE_BAR_H), not a probe.
         .child(
             h_flex()
+                // DRAG HANDLE: the title strip is the only drag area. A press
+                // here moves the window; presses anywhere else (body, pills,
+                // footer) never reach this handler, so their clicks complete.
+                .on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
+                    window.start_window_move();
+                    cx.stop_propagation();
+                })
                 .id("qt-popup-titlebar")
                 .h(px(32.))
                 .items_center()
@@ -319,7 +439,7 @@ pub fn translate_popup(state_entity: &Entity<DictState>, props: PopupProps) -> g
                     div()
                         .text_size(px(11.))
                         .text_color(colors::text_secondary())
-                        .child(SharedString::from("Quick Translate")),
+                        .child(SharedString::from(state.title())),
                 )
                 // No-drag wrapper: the close button is interactive, so a
                 // press on it must complete as a click, not a window move.
@@ -333,10 +453,15 @@ pub fn translate_popup(state_entity: &Entity<DictState>, props: PopupProps) -> g
     // The Translate button is always present (disabled while loading) so the
     // layout never jumps between states and a retry is always one click away.
     // It sits at the end of the scrollable body, like the design. Hidden in
-    // the TooLong state — there's nothing to translate.
+    // the TooLong state — there's nothing to translate — and in the lookup
+    // states, whose footer carries the Open in Dicto / Translate actions.
     let busy = matches!(state, PopupState::Loading { .. });
     let original_for_btn = match state {
-        PopupState::TooLong { .. } => None,
+        PopupState::TooLong { .. }
+        | PopupState::LookupLoading { .. }
+        | PopupState::LookupDisabled
+        | PopupState::LookupError { .. } => None,
+        PopupState::LookupReady { .. } | PopupState::LookupNotFound { .. } => None,
         PopupState::Idle { original }
         | PopupState::Loading { original }
         | PopupState::Ready { original, .. }
@@ -443,12 +568,94 @@ pub fn translate_popup(state_entity: &Entity<DictState>, props: PopupProps) -> g
                     ),
                 ))
         }
+
+        // Word Lookup states — content built by the lookup module.
+        PopupState::LookupLoading { .. }
+        | PopupState::LookupReady { .. }
+        | PopupState::LookupNotFound { .. }
+        | PopupState::LookupDisabled
+        | PopupState::LookupError { .. } => lookup::lookup_body(
+            state_entity,
+            &lookup_state_of(state),
+            &tts,
+            playback_source.clone(),
+        ),
     };
 
-    // The footer region owns the window frame's bottom edge: full-bleed top
-    // border, bottom rounding, toggle above the panel it reveals. The frame
-    // has no padding of its own (the body carries it), so no negative
-    // margins are needed.
+    // Layout mirrors the design: a flexing, scrollable body (text sections +
+    // Translate row) above the footer. The view resizes the WINDOW to the
+    // natural content height (MeasureProbes), so opening Options or showing
+    // the translation GROWS the window rather than compressing the body;
+    // only content taller than MAX_POPUP_H makes the body scroll.
+    //
+    // Two-layer pattern, both layers required: the outer div does the FLEX
+    // SIZING (flex_1 + min_h 0 — takes the space the footer leaves inside
+    // the definite-height card), the inner does the SCROLLING (h_full +
+    // overflow_y_scrollbar — `overflow_y_scrollbar` re-wraps its element in
+    // a `size_full` div, so it needs a definite height from the outer layer;
+    // sizing and scrolling on one div overflows instead of scrolling).
+    // The two probes inside the scroll content record its NATURAL height:
+    // both move with the scroll offset, so their delta is offset-independent.
+    // The probes are gap-free siblings of the content wrapper — the 8px gap
+    // lives INSIDE the wrapper, between content and the Translate row — so
+    // the probe delta is exactly the content height, with no phantom gaps.
+    let mut inner = v_flex().gap(px(8.)).child(content);
+    if let Some(row) = translate_row_fixed {
+        inner = inner.child(row);
+    }
+    let body_scroll = v_flex()
+        .id("qt-popup-body")
+        .h_full()
+        .overflow_y_scrollbar()
+        .child(probe(measure.body_top.clone()))
+        .child(inner)
+        .child(probe(measure.body_end.clone()));
+    // The body carries the frame's horizontal padding now that the title
+    // strip (full-bleed) and the footer (full-bleed) own the top and bottom
+    // edges. 12px bottom padding mirrors the design's py-3.
+    let body = v_flex()
+        .flex_1()
+        .min_h(px(0.))
+        .px(px(14.))
+        .pt(px(12.))
+        .pb(px(12.))
+        .child(body_scroll);
+
+    // Lookup states swap the Options footer for the action row (Open in
+    // Dicto / Translate). The hint states (disabled / read failure) carry
+    // their action inside the body and render no footer at all.
+    let footer = if state.is_lookup() {
+        if !state.lookup_has_actions() {
+            return card.child(body).into_any_element();
+        }
+        let has_translator = !settings.api_key.is_empty() && !settings.api_base_url.is_empty();
+        lookup::lookup_footer(state_entity, has_translator, &measure)
+    } else {
+        build_options_footer(
+            settings,
+            options_open,
+            options_settled,
+            options_panel,
+            on_toggle_options,
+            &measure,
+        )
+    };
+
+    card.child(body).child(footer).into_any_element()
+}
+
+/// Build the translate popup's Options footer: the disclosure toggle (with
+/// its provider/hotkey summary) plus the stateful Options panel when
+/// expanded. Split out of `translate_popup` so the lookup states can swap
+/// in their own footer.
+fn build_options_footer(
+    settings: &mdict_rs::settings::QuickTranslateSettings,
+    options_open: bool,
+    options_settled: bool,
+    options_panel: Entity<options::OptionsPanel>,
+    on_toggle_options: OnToggleOptions,
+    measure: &MeasureProbes,
+) -> gpui::AnyElement {
     let provider_summary = format!("OpenAI-compatible · {}", settings.hotkey);
     let mut footer = v_flex()
         .flex_shrink_0()
@@ -491,48 +698,9 @@ pub fn translate_popup(state_entity: &Entity<DictState>, props: PopupProps) -> g
     }
     // Records the footer's end Y: footer height feeds the window-height
     // computation (see MeasureProbes).
-    footer = footer.child(probe(measure.footer_end.clone()));
-
-    // Layout mirrors the design: a flexing, scrollable body (text sections +
-    // Translate row) above the footer. The view resizes the WINDOW to the
-    // natural content height (MeasureProbes), so opening Options or showing
-    // the translation GROWS the window rather than compressing the body;
-    // only content taller than MAX_POPUP_H makes the body scroll.
-    //
-    // Two-layer pattern, both layers required: the outer div does the FLEX
-    // SIZING (flex_1 + min_h 0 — takes the space the footer leaves inside
-    // the definite-height card), the inner does the SCROLLING (h_full +
-    // overflow_y_scrollbar — `overflow_y_scrollbar` re-wraps its element in
-    // a `size_full` div, so it needs a definite height from the outer layer;
-    // sizing and scrolling on one div overflows instead of scrolling).
-    // The two probes inside the scroll content record its NATURAL height:
-    // both move with the scroll offset, so their delta is offset-independent.
-    // The probes are gap-free siblings of the content wrapper — the 8px gap
-    // lives INSIDE the wrapper, between content and the Translate row — so
-    // the probe delta is exactly the content height, with no phantom gaps.
-    let mut inner = v_flex().gap(px(8.)).child(content);
-    if let Some(row) = translate_row_fixed {
-        inner = inner.child(row);
-    }
-    let body_scroll = v_flex()
-        .id("qt-popup-body")
-        .h_full()
-        .overflow_y_scrollbar()
-        .child(probe(measure.body_top.clone()))
-        .child(inner)
-        .child(probe(measure.body_end.clone()));
-    // The body carries the frame's horizontal padding now that the title
-    // strip (full-bleed) and the footer (full-bleed) own the top and bottom
-    // edges. 12px bottom padding mirrors the design's py-3.
-    let body = v_flex()
-        .flex_1()
-        .min_h(px(0.))
-        .px(px(14.))
-        .pt(px(12.))
-        .pb(px(12.))
-        .child(body_scroll);
-
-    card.child(body).child(footer).into_any_element()
+    footer
+        .child(probe(measure.footer_end.clone()))
+        .into_any_element()
 }
 
 /// View backing the Quick Translate popup window.
@@ -601,6 +769,28 @@ impl TranslatePopupView {
                     .timer(std::time::Duration::from_millis(100))
                     .await;
                 let Ok(()) = cx.update(|window, cx| {
+                    // Notify ONLY while audio is playing/loading: the seek
+                    // bar and word highlight need the ~10 Hz repaint. When
+                    // idle, skipping the notify keeps the popup's hitboxes
+                    // STILL between renders — re-rendering (plus the probe
+                    // → resize dance) every 100 ms shifted elements under
+                    // the cursor mid-click, silently eating pill clicks and
+                    // burning CPU. External changes (lookup results, popup
+                    // open/close) notify themselves through their own paths.
+                    let busy = {
+                        let s = poll_state.read(cx);
+                        let src = s.playback_source.snapshot().0;
+                        let tr = s.playback_translation.snapshot().0;
+                        matches!(
+                            src,
+                            crate::playback::PlaybackState::Playing { .. }
+                                | crate::playback::PlaybackState::Loading
+                        ) || matches!(
+                            tr,
+                            crate::playback::PlaybackState::Playing { .. }
+                                | crate::playback::PlaybackState::Loading
+                        )
+                    };
                     // Update each controller's live position…
                     cx.update_entity(&poll_state, |s, _cx| {
                         s.playback_source.poll_progress();
@@ -642,7 +832,11 @@ impl TranslatePopupView {
                                 view.unsettled_ticks = 0;
                             }
                         }
-                        cx.notify();
+                        // Idle ticks stay silent: no notify, no re-render —
+                        // the popup's layout (and click hitboxes) stays put.
+                        if busy {
+                            cx.notify();
+                        }
                     });
                 }) else {
                     break;
@@ -757,16 +951,55 @@ impl Render for TranslatePopupView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focus = self.focus.clone();
 
-        // Read popup state + full quick-translate settings + both playback
-        // snapshots + their live TTS word-highlight ranges (source and
-        // translation are independent controllers) out of DictState (cloned
-        // so the borrow ends before we pass cx).
-        let (status, settings, options_open, pb_src, pb_tr, hl_src, hl_tr) = {
+        // Read the popup state out of DictState (cloned so the borrow ends
+        // before we pass cx). The Word Lookup engine and the translate
+        // engine share the window — the lookup status wins when visible.
+        // Lookup states are mapped onto their PopupState twins so the rest
+        // of the view stays mode-agnostic. Settings come from the shared
+        // snapshot (TTS config is used by both modes).
+        let status: Option<crate::quick_translate::PopupStatus> = {
             let st = self.state.read(cx);
-            let engine = st.quick_translate_engine.as_ref();
+            if let Some(wl) = st.word_lookup_engine.as_ref().filter(|w| w.is_visible()) {
+                use crate::word_lookup::LookupState;
+                let ps = match wl.status() {
+                    crate::word_lookup::LookupStatus::Visible(LookupState::Loading { word }) => {
+                        PopupState::LookupLoading { word: word.clone() }
+                    }
+                    crate::word_lookup::LookupStatus::Visible(LookupState::Ready {
+                        word,
+                        results,
+                        active,
+                    }) => PopupState::LookupReady {
+                        word: word.clone(),
+                        results: results.clone(),
+                        active: *active,
+                    },
+                    crate::word_lookup::LookupStatus::Visible(LookupState::NotFound { word }) => {
+                        PopupState::LookupNotFound { word: word.clone() }
+                    }
+                    crate::word_lookup::LookupStatus::Visible(LookupState::Disabled) => {
+                        PopupState::LookupDisabled
+                    }
+                    crate::word_lookup::LookupStatus::Visible(LookupState::Error { message }) => {
+                        PopupState::LookupError {
+                            message: message.clone(),
+                        }
+                    }
+                    crate::word_lookup::LookupStatus::Hidden => PopupState::LookupLoading {
+                        word: String::new(),
+                    },
+                };
+                Some(crate::quick_translate::PopupStatus::Visible(ps))
+            } else {
+                st.quick_translate_engine
+                    .as_ref()
+                    .map(|e| e.popup_status().clone())
+            }
+        };
+        let (settings, options_open, pb_src, pb_tr, hl_src, hl_tr) = {
+            let st = self.state.read(cx);
             (
-                engine.map(|e| e.popup_status().clone()),
-                engine.map(|e| e.settings().clone()),
+                Some(st.quick_translate.clone()),
                 self.options_open,
                 st.playback_source.snapshot(),
                 st.playback_translation.snapshot(),
@@ -780,8 +1013,11 @@ impl Render for TranslatePopupView {
         // engine.set_original, so the engine's original equals
         // last_pushed_original while the user edits — no re-seed loop.
         // The read-only translation editor re-seeds whenever the Ready
-        // state carries a different translation.
-        if let Some(crate::quick_translate::PopupStatus::Visible(ps)) = status.as_ref() {
+        // state carries a different translation. Lookup states have no
+        // text editors — skipped entirely.
+        if let Some(crate::quick_translate::PopupStatus::Visible(ps)) = status.as_ref()
+            && !ps.is_lookup()
+        {
             let original = ps.original().to_string();
             if self.last_pushed_original.as_deref() != Some(original.as_str()) {
                 self.last_pushed_original = Some(original.clone());
@@ -916,13 +1152,17 @@ impl Render for TranslatePopupView {
 }
 
 /// Hide the popup state, stop any playing TTS clips, and close the popup
-/// window. Shared by the title-strip close button and Escape.
-fn close_popup(state: &Entity<DictState>, window: &mut Window, cx: &mut gpui::App) {
+/// window. Shared by the title-strip close button, Escape, and the lookup
+/// footer's "Open in Dicto" action.
+pub(crate) fn close_popup(state: &Entity<DictState>, window: &mut Window, cx: &mut gpui::App) {
     // Ask the GNOME Shell helper for the dragged position while the window
     // still exists; it answers from its cache, so ordering is safe.
     crate::window_move::save_popup_rect();
     state.update(cx, |s, cx| {
         if let Some(engine) = s.quick_translate_engine.as_mut() {
+            engine.hide_popup();
+        }
+        if let Some(engine) = s.word_lookup_engine.as_mut() {
             engine.hide_popup();
         }
         // The window is going away — stop speaking the source/translation

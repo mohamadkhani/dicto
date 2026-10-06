@@ -41,10 +41,12 @@ fn build_tray(action_tx: mpsc::Sender<TrayAction>) -> Result<(), String> {
     let menu = Menu::new();
     let show = MenuItem::with_id("show", "Show Dictionary", true, None);
     let quick_translate = MenuItem::with_id("quick_translate", "Quick Translate", true, None);
+    let quick_lookup = MenuItem::with_id("quick_lookup", "Look Up Word", true, None);
     let quit = MenuItem::with_id("quit", "Quit", true, None);
     menu.append_items(&[
         &show,
         &quick_translate,
+        &quick_lookup,
         &PredefinedMenuItem::separator(),
         &quit,
     ])
@@ -70,6 +72,7 @@ fn build_tray(action_tx: mpsc::Sender<TrayAction>) -> Result<(), String> {
                 let action = match event.id.0.as_str() {
                     "show" => TrayAction::Show,
                     "quick_translate" => TrayAction::QuickTranslate,
+                    "quick_lookup" => TrayAction::QuickLookup,
                     "quit" => TrayAction::Quit,
                     _ => continue,
                 };

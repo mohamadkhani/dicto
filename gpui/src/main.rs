@@ -22,6 +22,7 @@ mod tts;
 #[cfg(target_os = "windows")]
 mod win32;
 mod window_move;
+mod word_lookup;
 
 use std::borrow::Cow;
 use std::sync::atomic::AtomicBool;
@@ -43,6 +44,10 @@ use crate::tray::{TrayAction, spawn_tray};
 /// Global flag set by the tray menu "Quick Translate" item.
 /// The main app loop polls this and triggers translation when set.
 static TRAY_TRANSLATE_TRIGGERED: AtomicBool = AtomicBool::new(false);
+
+/// Global flag set by the tray menu "Look Up Word" item.
+/// The main app loop polls this and triggers a word lookup when set.
+static TRAY_LOOKUP_TRIGGERED: AtomicBool = AtomicBool::new(false);
 
 /// The compositor-minted xdg-activation token captured by the tray (SNI
 /// `ProvideXdgActivationToken`) immediately before a "Quick Translate" click.
@@ -71,41 +76,54 @@ pub fn take_tray_translate_token() -> Option<String> {
         .and_then(|mut g| g.take())
 }
 
-/// Path to the IPC socket used by `dicto --translate` to signal a running
-/// instance. Lives in the user's runtime directory.
+/// Path to an IPC socket used by `dicto --translate` / `dicto --lookup` to
+/// signal a running instance. Lives in the user's runtime directory.
 #[cfg(target_os = "linux")]
-fn ipc_socket_path() -> std::path::PathBuf {
+fn ipc_socket_path(name: &str) -> std::path::PathBuf {
     let base = std::env::var("XDG_RUNTIME_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
-    base.join("dicto-translate.sock")
+    base.join(name)
 }
 
-/// Send a translate trigger to the running instance via the IPC socket.
-/// Returns an error if no instance is listening.
+/// Send a trigger to the running instance via the named IPC socket.
+/// Returns a human-readable error when no live instance is listening —
+/// including the stale-socket case (a previous instance died and left the
+/// socket file behind; connecting to it fails with ECONNREFUSED).
 #[cfg(target_os = "linux")]
-fn send_translate_trigger() -> std::io::Result<()> {
+fn send_ipc_trigger(socket_name: &str) -> Result<(), String> {
     use std::io::Write;
     use std::os::unix::net::UnixStream;
 
-    let path = ipc_socket_path();
-    let mut stream = UnixStream::connect(&path)?;
-    stream.write_all(b"translate\n")?;
-    Ok(())
+    let path = ipc_socket_path(socket_name);
+    match UnixStream::connect(&path) {
+        Ok(mut stream) => stream.write_all(b"trigger\n").map_err(|e| e.to_string()),
+        Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => Err(format!(
+            "stale IPC socket at {} — a previous Dicto instance exited \
+             without cleanup. Quit and restart Dicto to fix it. ({e})",
+            path.display()
+        )),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
-/// Spawn the IPC server that listens for `dicto --translate` triggers.
-/// Runs in a background thread; sets the global flag on each trigger.
+/// Spawn an IPC server that listens for trigger messages on the named
+/// socket and sets the given global flag on each one. Runs in a background
+/// thread; the poll loop in app.rs drains the flag.
 #[cfg(target_os = "linux")]
-fn spawn_ipc_server() {
+fn spawn_ipc_server(
+    socket_name: &'static str,
+    flag: &'static AtomicBool,
+    thread_name: &'static str,
+) {
     use std::os::unix::net::UnixListener;
 
-    let path = ipc_socket_path();
+    let path = ipc_socket_path(socket_name);
     let _ = std::fs::remove_file(&path); // clear stale socket
 
     let listener = match UnixListener::bind(&path) {
         Ok(l) => {
-            tracing::info!("ipc: listening on {}", path.display());
+            tracing::info!(socket = %path.display(), "ipc: listening");
             l
         }
         Err(e) => {
@@ -115,14 +133,14 @@ fn spawn_ipc_server() {
     };
 
     std::thread::Builder::new()
-        .name("dicto-ipc".into())
+        .name(thread_name.into())
         .spawn(move || {
             use std::io::Read;
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
                 let mut buf = [0u8; 32];
                 if stream.read(&mut buf).unwrap_or(0) > 0 {
-                    TRAY_TRANSLATE_TRIGGERED.store(true, Ordering::Release);
+                    flag.store(true, Ordering::Release);
                 }
             }
         })
@@ -176,20 +194,26 @@ impl AssetSource for AppAssets {
 }
 
 fn main() {
-    // Handle the `--translate` CLI flag FIRST, before any GUI init: a second
-    // invocation with this flag signals the already-running instance to
-    // trigger quick translate. This is the GNOME Wayland workaround for
+    // Handle the `--translate` / `--lookup` CLI flags FIRST, before any GUI
+    // init: a second invocation with one of these flags signals the
+    // already-running instance. This is the GNOME Wayland workaround for
     // global hotkeys — the user binds a custom keyboard shortcut to
-    // `dicto --translate` in GNOME Settings → Keyboard → Custom Shortcuts.
-    if std::env::args().any(|a| a == "--translate" || a == "-t") {
+    // `dicto --translate` / `dicto --lookup` in GNOME Settings → Keyboard →
+    // Custom Shortcuts.
+    let trigger_flag = std::env::args().find_map(|a| match a.as_str() {
+        "--translate" | "-t" => Some(("dicto-translate.sock", "dicto: --translate")),
+        "--lookup" | "-l" => Some(("dicto-lookup.sock", "dicto: --lookup")),
+        _ => None,
+    });
+    if let Some((socket, label)) = trigger_flag {
         #[cfg(target_os = "linux")]
         {
-            match send_translate_trigger() {
+            match send_ipc_trigger(socket) {
                 Ok(()) => std::process::exit(0),
                 Err(e) => {
                     eprintln!(
-                        "dicto: could not reach a running instance.\n\
-                         Start Dicto first, then press the shortcut.\n\
+                        "{label}: could not reach a running instance.\n\
+                         Start (or restart) Dicto first, then press the shortcut.\n\
                          Error: {e}"
                     );
                     std::process::exit(1);
@@ -198,7 +222,8 @@ fn main() {
         }
         #[cfg(not(target_os = "linux"))]
         {
-            eprintln!("dicto: --translate IPC is only supported on Linux");
+            let _ = (socket, label);
+            eprintln!("dicto: --translate/--lookup IPC is only supported on Linux");
             std::process::exit(1);
         }
     }
@@ -270,10 +295,22 @@ fn main() {
             gpui_component::init(cx);
             Theme::change(ThemeMode::Dark, None, cx);
 
-            // Start the IPC server so `dicto --translate` (e.g. from a GNOME
-            // custom keyboard shortcut) can trigger quick translate.
+            // Start the IPC servers so `dicto --translate` / `dicto --lookup`
+            // (e.g. from a GNOME custom keyboard shortcut) can trigger the
+            // popups in the running instance.
             #[cfg(target_os = "linux")]
-            spawn_ipc_server();
+            {
+                spawn_ipc_server(
+                    "dicto-translate.sock",
+                    &TRAY_TRANSLATE_TRIGGERED,
+                    "dicto-ipc-translate",
+                );
+                spawn_ipc_server(
+                    "dicto-lookup.sock",
+                    &TRAY_LOOKUP_TRIGGERED,
+                    "dicto-ipc-lookup",
+                );
+            }
 
             // Spawn the system tray; poll its action channel from the main
             // loop.
@@ -322,6 +359,11 @@ fn poll_tray_actions(
                         let token = tray_token.lock().ok().and_then(|mut g| g.take());
                         set_tray_translate_token(token);
                         TRAY_TRANSLATE_TRIGGERED.store(true, Ordering::Release);
+                    }
+                    TrayAction::QuickLookup => {
+                        let token = tray_token.lock().ok().and_then(|mut g| g.take());
+                        set_tray_translate_token(token);
+                        TRAY_LOOKUP_TRIGGERED.store(true, Ordering::Release);
                     }
                     TrayAction::Quit => {
                         cx.update(|cx| cx.quit());
@@ -387,6 +429,11 @@ fn open_dictionary_window(cx: &mut App) {
                     // state (and its new selection) must survive.
                     let replace_pending = s.qt_replace_pending;
                     if let Some(engine) = s.quick_translate_engine.as_mut()
+                        && !replace_pending
+                    {
+                        engine.hide_popup();
+                    }
+                    if let Some(engine) = s.word_lookup_engine.as_mut()
                         && !replace_pending
                     {
                         engine.hide_popup();

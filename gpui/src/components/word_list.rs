@@ -117,9 +117,11 @@ fn word_item(
                 .into_iter()
                 .map(|hit| {
                     let blocks = crate::html::parse_styled(&hit.definition, &hit.stem);
+                    let audio = crate::html::first_sound_path(&blocks);
                     crate::state::DictResult {
                         short_name: hit.short_name,
                         blocks,
+                        audio,
                     }
                 })
                 .collect();

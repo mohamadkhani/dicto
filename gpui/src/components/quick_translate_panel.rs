@@ -235,6 +235,87 @@ pub fn quick_translate_tab_content(
              Leave disabled to use system TTS (espeak-ng).",
         ));
 
+    // --- Word Lookup section ---
+    // Local dictionary popup: select a word anywhere, press the hotkey, see
+    // the definition. No network, no API key — reads the MDict dictionaries.
+    let wl_settings = state.read(cx).word_lookup.clone();
+    let wl_toggle_state = state.clone();
+    let wl_enabled = wl_settings.enabled;
+    let wl_enable_row = h_flex()
+        .justify_between()
+        .items_center()
+        .py(px(10.))
+        .child(
+            div()
+                .text_size(px(13.))
+                .text_color(colors::text())
+                .child(SharedString::from("Enable Word Lookup")),
+        )
+        .child(toggle_switch("wl-enable", wl_enabled, move |cx| {
+            wl_toggle_state.update(cx, |s, cx| {
+                s.word_lookup.enabled = !wl_enabled;
+                s.save_settings(cx);
+                s.reload_hotkey(cx);
+            });
+        }));
+
+    let wl_hotkey_row = h_flex()
+        .items_center()
+        .py(px(8.))
+        .gap(px(12.))
+        .child(
+            div()
+                .w(px(120.))
+                .text_size(px(12.))
+                .text_color(colors::text_secondary())
+                .child(SharedString::from("Global Hotkey")),
+        )
+        .child(
+            div()
+                .px(px(10.))
+                .py(px(5.))
+                .rounded(px(4.))
+                .bg(colors::bg())
+                .border_1()
+                .border_color(colors::border())
+                .text_size(px(12.))
+                .text_color(colors::text())
+                .child(SharedString::from(wl_settings.hotkey.clone())),
+        );
+
+    // Backend note (same treatment as the translate hotkey's note).
+    let wl_backend_note = wl_enabled.then(|| {
+        let backend = state
+            .read(cx)
+            .word_lookup_engine
+            .as_ref()
+            .map(|e| e.backend_name().to_string())
+            .unwrap_or_else(|| "none".to_string());
+        div()
+            .text_size(px(11.))
+            .text_color(colors::text_secondary())
+            .child(SharedString::from(format!(
+                "Hotkey backend: {}",
+                match backend.as_str() {
+                    "x11" => "X11 (fully supported)",
+                    "windows" => "Windows (fully supported)",
+                    "tray_menu" => "Tray menu only — use the tray icon to look up",
+                    other => other,
+                }
+            )))
+    });
+
+    // Smart-dispatch note: the translate hotkey already routes single words
+    // here when the feature is enabled.
+    let wl_note = div()
+        .text_size(px(11.))
+        .text_color(colors::text_secondary())
+        .child(SharedString::from(
+            "Looks the selected word up in your local dictionaries — no internet \
+             needed. With this enabled, the Quick Translate hotkey also opens the \
+             lookup when you select a single word; phrases still translate.",
+        ));
+
     // Warning if API key is missing
     let warning = if settings.enabled && settings.api_key.is_empty() {
         Some(
@@ -298,6 +379,18 @@ pub fn quick_translate_tab_content(
         body = body.child(tts_test_row);
     }
     body = body.child(tts_note);
+
+    // Word Lookup section
+    body = body.child(divider());
+    body = body.child(section_title("Word Lookup"));
+    body = body.child(wl_enable_row);
+    if wl_enabled {
+        body = body.child(wl_hotkey_row);
+        if let Some(note) = wl_backend_note {
+            body = body.child(note);
+        }
+    }
+    body = body.child(wl_note);
 
     // Outer div participates in the parent's flex layout (flex_1 = remaining
     // height). The overflow wrapper from overflow_y_scroll loses flex_grow, so

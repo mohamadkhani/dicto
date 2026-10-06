@@ -132,6 +132,9 @@ pub enum LookupSource {
     Click,
     /// User navigated with Up/Down arrow keys and confirmed the selection.
     Keyboard,
+    /// Quick Lookup popup triggered from another desktop app (hotkey or
+    /// tray menu). The lookup ran against the local dictionaries.
+    QuickPopup,
 }
 
 impl LookupSource {
@@ -140,6 +143,7 @@ impl LookupSource {
             Self::AutoPreview => "auto_preview",
             Self::Click => "click",
             Self::Keyboard => "keyboard",
+            Self::QuickPopup => "quick_popup",
         }
     }
 }

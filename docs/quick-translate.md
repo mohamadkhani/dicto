@@ -7,6 +7,9 @@ Speak buttons. This document is the spec for that popup — the trigger flow, th
 popup states, the independent playback slots, the settings, and the
 platform-specific backends.
 
+The same popup window also hosts the **Word Lookup** mode (see the end of this
+document): local dictionary definitions for single words, with no network.
+
 > **TL;DR for the bug-prone parts:**
 > - The popup only reads the selection on trigger; translation runs **on explicit
 >   Translate click**, not on hotkey.
@@ -384,3 +387,73 @@ Both are no-ops under `NullTelemetry` when the user has not opted in. See
 | [gpui/src/components/quick_translate_panel.rs](../gpui/src/components/quick_translate_panel.rs) | Settings tab UI. |
 | [gpui/src/state.rs](../gpui/src/state.rs) | `DictState`: holds the engine + the two playback controllers + `qt_popup_window`. |
 | [src/settings/mod.rs](../src/settings/mod.rs) | `QuickTranslateSettings` + `TtsSettings`. |
+
+---
+
+## Word Lookup mode
+
+The twin feature: select a word anywhere, press `Ctrl+Alt+W` (or the tray's
+"Look Up Word"), and the popup shows the local-dictionary definition instead
+of an LLM translation. Everything visual and mechanical is shared — one
+popup window, one selection reader, one TTS slot — only the middle differs.
+
+### Trigger dispatch (smart dispatch)
+
+`DictApp`'s poll loop drains BOTH engines' hotkeys each tick. On the
+translate hotkey it routes: a single-word selection
+([`is_single_word`](../gpui/src/selection.rs)) goes to the lookup engine,
+anything else to quick translate — but only when Word Lookup is enabled. The
+lookup hotkey and the tray item are always a plain lookup. Both engines'
+`poll()` only DRAIN events; the poll loop decides what a press means.
+
+### Flow
+
+```
+lookup hotkey / tray / smart dispatch
+        │
+        ▼
+read_selected_text() ─▶ normalize_word() ─▶ LookupState::Loading
+        │                                     (popup shows spinner)
+        ▼
+LookupJob on the background executor
+   mdict_rs::query::query_all + crate::html::parse_styled
+        │
+        ▼
+apply_result() ─▶ LookupReady { word, results, active }
+             └─▶ LookupNotFound { word }  → "Translate" (AI fallback)
+```
+
+### Popup states
+
+Added to `PopupState` (mapped from `crate::word_lookup::LookupState`):
+
+| Variant | Meaning |
+|---|---|
+| `LookupLoading { word }` | Querying the dictionaries. Word header + spinner. |
+| `LookupReady { word, results, active }` | One `DictResult` (parsed blocks) per dictionary; `active` selects the tab. Tab strip only when >1 hit. |
+| `LookupNotFound { word }` | No hits; the footer offers "Translate" (reuses `restart_translation`, so the same window flips to the translate Loading state). |
+
+The lookup footer replaces the Options footer: "Open in Dicto" moves the
+parsed `DictResult`s into the main window's state (`result_word` / `results`)
+and closes the popup; "Translate" is hidden when no AI provider is configured.
+
+### Reused pieces
+
+| Piece | Source |
+|---|---|
+| Selection reading, hotkey backends, tray, popup window, seek/TTS | same as translate (the Source slot is free — lookup has no editor) |
+| Dictionary query + HTML parse | `mdict_rs::query::query_all` + `crate::html::parse_styled` (same call shape as `DictApp::lookup_word`) |
+| Definition rendering | `crate::html::render_blocks` — the detail panel's renderer |
+| Dict tabs | gpui-component `TabBar`, same style as the detail panel |
+| Speak + copy | `playback::playback_controls(Slot::Source)` + generalized `sections::copy_button(id, …)` |
+
+### Files
+
+| File | Role |
+|---|---|
+| [gpui/src/word_lookup.rs](../gpui/src/word_lookup.rs) | Engine: hotkey, normalize, `LookupJob`/`LookupOutcome`, popup status. |
+| [gpui/src/components/translate_popup/lookup.rs](../gpui/src/components/translate_popup/lookup.rs) | Lookup UI: word header, dict tabs, definition, action footer. |
+| [gpui/src/components/translate_popup/mod.rs](../gpui/src/components/translate_popup/mod.rs) | `Lookup*` `PopupState` variants, title, height estimate, footer dispatch. |
+| [src/settings/mod.rs](../src/settings/mod.rs) | `WordLookupSettings { enabled, hotkey }` under `[word_lookup]`. |
+
+Telemetry: `LookupPerformed { source: "quick_popup" }` on each trigger.

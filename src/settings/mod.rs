@@ -32,6 +32,10 @@ pub struct Settings {
     /// `dicto-translate` crate both have access without circular deps.
     #[serde(default)]
     pub quick_translate: QuickTranslateSettings,
+    /// Word Lookup feature: global hotkey + local dictionary popup settings.
+    /// Same plain-data placement as `quick_translate`.
+    #[serde(default)]
+    pub word_lookup: WordLookupSettings,
     /// User dismissed the "install Window Calls" hint (GNOME Wayland popup
     /// placement). Persisted so it is shown at most once per decision.
     #[serde(default)]
@@ -104,6 +108,35 @@ impl Default for QuickTranslateSettings {
             tts: TtsSettings::default(),
         }
     }
+}
+
+/// Word Lookup feature settings.
+///
+/// Controls the global hotkey (and enable flag) for the quick dictionary
+/// lookup popup: select a word anywhere, press the hotkey, and a small
+/// popup shows the local-dictionary definition. Lookups always run against
+/// the local MDict dictionaries — no network, no API key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WordLookupSettings {
+    /// Whether the word-lookup feature is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Hotkey string in "Mod+Mod+Key" format, e.g. "Ctrl+Alt+W".
+    #[serde(default = "default_lookup_hotkey")]
+    pub hotkey: String,
+}
+
+impl Default for WordLookupSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            hotkey: default_lookup_hotkey(),
+        }
+    }
+}
+
+fn default_lookup_hotkey() -> String {
+    "Ctrl+Alt+W".to_string()
 }
 
 /// Text-to-speech settings.

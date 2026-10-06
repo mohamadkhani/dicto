@@ -5,9 +5,11 @@
 //! pill buttons that play audio via the MDD resource lookup; images
 //! are cached to a tmp directory and rendered via `gpui::img`.
 
+use std::collections::HashMap;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::sync::{LazyLock, RwLock};
 
 use gpui::{
     FontWeight, InteractiveElement, IntoElement, ParentElement, SharedString,
@@ -19,6 +21,27 @@ use tracing::{debug, warn};
 use crate::audio;
 use crate::colors;
 use crate::html::parser::{Block, BlockLayout, Inline, Link, Style};
+
+/// Memoized `resource src → cached image file`. Rendering re-runs on every
+/// frame, and `lookup_resource` hits the registry's FST + disk on each
+/// call — with a dozen icons per entry that dragged the whole UI down
+/// ("the GUI is slow"). The cached files live in a tmp dir for the
+/// session, so the mapping is stable once resolved.
+static IMAGE_PATHS: LazyLock<RwLock<HashMap<String, Option<PathBuf>>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// Resource bytes → cached image file, resolved once per source.
+fn cached_icon(src: &str) -> Option<PathBuf> {
+    if let Some(hit) = IMAGE_PATHS.read().unwrap().get(src) {
+        return hit.clone();
+    }
+    let resolved = mdict_rs::query::lookup_resource(src).and_then(|bytes| cache_image(src, &bytes));
+    IMAGE_PATHS
+        .write()
+        .unwrap()
+        .insert(src.to_string(), resolved.clone());
+    resolved
+}
 
 /// Render a pre-parsed block list. Callers parse once on lookup and
 /// cache the result so we don't re-parse on every frame. Iteration is
@@ -425,8 +448,9 @@ fn sound_button(
     path: SharedString,
 ) -> gpui::AnyElement {
     let icon_only = image_src.is_none() && label.trim().is_empty();
+    let id = SharedString::from(format!("snd-{block_idx}-{run_idx}"));
     let mut btn = div()
-        .id(SharedString::from(format!("snd-{block_idx}-{run_idx}")))
+        .id(id.clone())
         .cursor_pointer()
         .flex_shrink(0.)
         .min_w(px(0.));
@@ -446,15 +470,10 @@ fn sound_button(
             .py(px(1.))
             .rounded(px(4.))
             .hover(|s| s.bg(colors::border()));
-        if let Some(bytes) = mdict_rs::query::lookup_resource(src.as_ref()) {
-            if let Some(cached) = cache_image(src.as_ref(), &bytes) {
-                btn = btn.child(img(cached).h(px(16.)).w(px(16.)));
-            } else {
-                btn = btn.child(SharedString::from("▶"));
-            }
-        } else {
-            btn = btn.child(SharedString::from("▶"));
-        }
+        btn = match cached_icon(src.as_ref()) {
+            Some(cached) => btn.child(img(cached).h(px(16.)).w(px(16.))),
+            None => btn.child(SharedString::from("▶")),
+        };
     } else if icon_only {
         let color = style
             .color
@@ -496,18 +515,7 @@ fn sound_button(
 }
 
 fn image_block(idx: usize, src: &str) -> gpui::AnyElement {
-    let bytes = match mdict_rs::query::lookup_resource(src) {
-        Some(b) => b,
-        None => {
-            return div()
-                .text_size(px(12.))
-                .text_color(colors::text_secondary())
-                .child(SharedString::from(format!("[image: {src}]")))
-                .into_any_element();
-        }
-    };
-
-    let Some(path) = cache_image(src, &bytes) else {
+    let Some(path) = cached_icon(src) else {
         return div()
             .text_size(px(12.))
             .text_color(colors::text_secondary())

@@ -97,6 +97,23 @@ pub struct Inline {
     pub image: Option<SharedString>,
 }
 
+/// The first `sound://` resource path in the parsed entry, if any — the
+/// dictionary's bundled pronunciation clip for the headword. Used by the
+/// quick lookup popup's header Speak button (dictionary audio before TTS).
+pub fn first_sound_path(blocks: &[Block]) -> Option<String> {
+    blocks.iter().find_map(|block| {
+        let runs = match block {
+            Block::Paragraph { runs, .. } | Block::Heading { runs, .. } => runs,
+            Block::ListItem { content, .. } => content,
+            Block::Divider | Block::Image(_) => return None,
+        };
+        runs.iter().find_map(|run| match &run.link {
+            Some(Link::Sound(path)) => Some(path.to_string()),
+            _ => None,
+        })
+    })
+}
+
 #[derive(Debug)]
 enum Event {
     Open(String, HashMap<String, String>),

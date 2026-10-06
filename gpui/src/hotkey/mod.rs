@@ -31,6 +31,9 @@ pub enum HotkeyError {
 /// Identifier for the quick-translate hotkey.
 pub const QUICK_TRANSLATE_ID: &str = "quick_translate";
 
+/// Identifier for the quick word-lookup hotkey.
+pub const QUICK_LOOKUP_ID: &str = "quick_lookup";
+
 /// A platform-agnostic hotkey manager.
 ///
 /// Call [`try_recv`](Self::try_recv) periodically (e.g. in the GPUI event

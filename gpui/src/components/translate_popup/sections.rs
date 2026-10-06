@@ -21,6 +21,17 @@ use crate::{colors, components::text_editor, state::DictState};
 
 pub(crate) type PlaybackSnapshot = crate::playback::PlaybackSnapshot;
 
+impl Slot {
+    /// DOM id of the slot's copy button (element ids must be unique per
+    /// interactive element — see the slot-suffix note in the docs).
+    pub(crate) fn copy_id(self) -> &'static str {
+        match self {
+            Slot::Source => "qt-copy-src",
+            Slot::Translation => "qt-copy-tr",
+        }
+    }
+}
+
 /// Build a section header row: small uppercase label + status indicator +
 /// COPY and play buttons. Mirrors the design's `dicto-section` component.
 pub(crate) fn section_header(
@@ -61,7 +72,7 @@ pub(crate) fn section_header(
             h_flex()
                 .gap(px(4.))
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(copy_button(slot, text))
+                .child(copy_button(slot.copy_id(), text))
                 .child(playback_controls(
                     slot,
                     text.to_string(),
@@ -76,11 +87,8 @@ pub(crate) fn section_header(
 
 /// Small square icon button that copies the section's text to the clipboard.
 /// Styled after the TTS play button so the header reads as one control group.
-fn copy_button(slot: Slot, text: &str) -> gpui::Stateful<gpui::Div> {
-    let id = match slot {
-        Slot::Source => "qt-copy-src",
-        Slot::Translation => "qt-copy-tr",
-    };
+/// `id` must be unique per rendered instance (GPUI dispatches clicks by id).
+pub(crate) fn copy_button(id: &'static str, text: &str) -> gpui::Stateful<gpui::Div> {
     let text = text.to_string();
     v_flex()
         .id(id)
@@ -239,8 +247,8 @@ fn source_voice_lang() -> String {
 
 /// Run a `TranslationJob` on the background executor and feed its outcome back
 /// into the engine, then notify the popup to re-render. Mirrors the poll loop's
-/// spawn in app.rs.
-fn spawn_translation(
+/// spawn in app.rs. Also used by the lookup popup's "Translate" fallback.
+pub(crate) fn spawn_translation(
     job: crate::quick_translate::TranslationJob,
     entity: Entity<DictState>,
     cx: &mut gpui::App,

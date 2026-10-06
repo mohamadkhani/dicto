@@ -33,6 +33,7 @@ pub type SharedToken = Arc<Mutex<Option<String>>>;
 pub enum TrayAction {
     Show,
     QuickTranslate,
+    QuickLookup,
     Quit,
 }
 

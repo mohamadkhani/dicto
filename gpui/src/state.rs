@@ -1,16 +1,21 @@
 use std::path::PathBuf;
 
-use mdict_rs::settings::{DictEntry, QuickTranslateSettings};
+use mdict_rs::settings::{DictEntry, QuickTranslateSettings, WordLookupSettings};
 
 use crate::catalog::DictCatalogEntry;
 use crate::html::Block;
 use crate::quick_translate::QuickTranslateEngine;
+use crate::word_lookup::WordLookupEngine;
 
 #[derive(Debug, Clone)]
 pub struct DictResult {
     /// Short name for tab labels.
     pub short_name: String,
     pub blocks: Vec<Block>,
+    /// The dictionary's bundled pronunciation clip for the headword
+    /// (first `sound://` resource in the entry), if any. The quick
+    /// lookup popup plays this before falling back to TTS.
+    pub audio: Option<String>,
 }
 
 pub struct ImportFile {
@@ -90,6 +95,9 @@ pub struct DictState {
     /// Quick Translate settings snapshot (loaded from disk, editable in UI).
     pub quick_translate: QuickTranslateSettings,
 
+    /// Word Lookup settings snapshot (loaded from disk, editable in UI).
+    pub word_lookup: WordLookupSettings,
+
     /// Hotkey backend identifier — "x11", "tray_menu", or "none".
     pub hotkey_backend: String,
 
@@ -98,6 +106,10 @@ pub struct DictState {
     /// Stored as an option so we can lazily initialize or replace it
     /// when settings change.
     pub quick_translate_engine: Option<QuickTranslateEngine>,
+
+    /// Word Lookup engine (lookup hotkey + popup state). Shares the popup
+    /// window with the translate engine — only one is visible at a time.
+    pub word_lookup_engine: Option<WordLookupEngine>,
 
     /// TTS playback controllers — one per Speak slot so the source and the
     /// translation can play independently without their controls/state mixing.
@@ -202,11 +214,17 @@ impl DictState {
     pub fn new() -> Self {
         let settings = mdict_rs::settings::current();
         let qt_settings = settings.quick_translate.clone();
+        let wl_settings = settings.word_lookup.clone();
         let engine = if qt_settings.enabled {
             Some(QuickTranslateEngine::new(qt_settings.clone()))
         } else {
             None
         };
+        // The word-lookup engine ALWAYS exists (unlike the translate
+        // engine): triggers via IPC / tray must be able to show the
+        // "enable me" popup instead of failing silently. Only its hotkey
+        // registration is gated on `enabled`.
+        let word_lookup_engine = Some(WordLookupEngine::new(wl_settings.clone()));
         let backend = engine
             .as_ref()
             .map(|e| e.backend_name().to_string())
@@ -232,8 +250,10 @@ impl DictState {
             download_active_id: None,
             import_modal_tab: 0,
             quick_translate: qt_settings,
+            word_lookup: wl_settings,
             hotkey_backend: backend,
             quick_translate_engine: engine,
+            word_lookup_engine,
             qt_api_key_input: None,
             qt_base_url_input: None,
             qt_model_input: None,
@@ -275,7 +295,7 @@ impl DictState {
         !qt.api_key.is_empty() && !qt.api_base_url.is_empty()
     }
 
-    /// Reload the hotkey registration after settings change.
+    /// Reload the hotkey registrations after settings change.
     pub fn reload_hotkey(&mut self, _cx: &mut gpui::App) {
         let settings = self.quick_translate.clone();
 
@@ -286,6 +306,15 @@ impl DictState {
             let engine = QuickTranslateEngine::new(settings);
             self.hotkey_backend = engine.backend_name().to_string();
             self.quick_translate_engine = Some(engine);
+        }
+
+        // Word Lookup engine always exists; update_settings handles the
+        // enable/hotkey lifecycle.
+        let wl_settings = self.word_lookup.clone();
+        if let Some(engine) = self.word_lookup_engine.as_mut() {
+            engine.update_settings(wl_settings);
+        } else {
+            self.word_lookup_engine = Some(WordLookupEngine::new(wl_settings));
         }
     }
 
@@ -305,6 +334,7 @@ impl DictState {
         let mut current = mdict_rs::settings::current();
         current.dictionaries = self.dictionaries.clone();
         current.quick_translate = self.quick_translate.clone();
+        current.word_lookup = self.word_lookup.clone();
         let _ = mdict_rs::settings::save(&current);
     }
 

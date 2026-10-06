@@ -112,27 +112,25 @@ impl QuickTranslateEngine {
         }
     }
 
-    /// Poll for hotkey events. Returns `true` if the popup was (re)opened.
+    /// Poll for hotkey events. Returns `true` if the quick-translate hotkey
+    /// fired since the last call.
     ///
-    /// On a hotkey activation this calls [`trigger_translate`], which reads the
-    /// selection and shows it in an `Idle` state. No translation runs here —
-    /// the popup's Translate button calls [`start_translation`].
+    /// This only DRAINS the event — it no longer opens the popup itself.
+    /// The caller (DictApp's poll loop) decides what a hotkey press means:
+    /// a plain translate, or a smart-dispatched word lookup when the
+    /// selection is a single word and the lookup feature is enabled. The
+    /// popup is opened by an explicit [`trigger_translate`](Self::trigger_translate)
+    /// call.
     pub fn poll(&mut self) -> bool {
-        // Check for hotkey events without holding a borrow on self.
-        let mut should_trigger = false;
+        let mut fired = false;
         if let Some(manager) = self.hotkey_manager.as_ref() {
             while let Some(id) = manager.try_recv() {
                 if id == QUICK_TRANSLATE_ID {
-                    should_trigger = true;
+                    fired = true;
                 }
             }
         }
-
-        if should_trigger {
-            self.trigger_translate()
-        } else {
-            false
-        }
+        fired
     }
 
     /// Open the popup with the currently-selected text (hotkey / tray trigger).
@@ -257,7 +255,9 @@ impl QuickTranslateEngine {
     }
 
     /// The full quick-translate settings (provider, model, target lang, TTS).
-    /// Used by the popup to render inline selectors.
+    /// Unused since the popup reads settings from the shared snapshot; kept
+    /// as part of the engine's accessor surface.
+    #[allow(dead_code)]
     pub fn settings(&self) -> &QuickTranslateSettings {
         &self.settings
     }

@@ -108,6 +108,7 @@ impl Tray for DictoTray {
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let tx_show = self.action_tx.clone();
         let tx_translate = self.action_tx.clone();
+        let tx_lookup = self.action_tx.clone();
         let tx_quit = self.action_tx.clone();
 
         vec![
@@ -124,6 +125,14 @@ impl Tray for DictoTray {
                 enabled: true,
                 activate: Box::new(move |_this| {
                     let _ = tx_translate.send(TrayAction::QuickTranslate);
+                }),
+                ..Default::default()
+            }),
+            MenuItem::Standard(StandardItem {
+                label: "Look Up Word".into(),
+                enabled: true,
+                activate: Box::new(move |_this| {
+                    let _ = tx_lookup.send(TrayAction::QuickLookup);
                 }),
                 ..Default::default()
             }),

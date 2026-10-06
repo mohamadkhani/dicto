@@ -168,7 +168,61 @@ pub fn saved_pos() -> Option<(i32, i32)> {
     ))
 }
 
-/// Move the popup window to (x, y). Retries while the window is still
+/// Focus (raise + give keyboard focus to) the popup after it maps.
+///
+/// This is the reliable focus path when Dicto is a BACKGROUND app: Mutter
+/// refuses keyboard focus for freshly mapped windows of background apps
+/// (focus-stealing prevention), and activation tokens only exist when a
+/// focused app mints them (tray clicks). The window-calls extension runs
+/// INSIDE the compositor, so its Activate is not subject to that policy.
+/// Requires a version of the extension with the `Activate` method; older
+/// versions no-op (gdbus returns an error, we give up quietly).
+/// Fire-and-forget. Retries while the window is still mapping, and until
+/// the deadline passes.
+pub fn focus_popup_async() {
+    std::thread::spawn(move || {
+        let winid = wait_popup_winid();
+        let Some(winid) = winid else {
+            tracing::debug!("window_move: popup never appeared to focus");
+            return;
+        };
+        activate_until_deadline(winid, Duration::from_millis(1000));
+    });
+}
+
+/// Wait (bounded) for the extension to see the popup window; returns its id.
+fn wait_popup_winid() -> Option<u32> {
+    for _ in 0..50 {
+        if let Some(id) = find_popup_winid() {
+            return Some(id);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    None
+}
+
+/// Call `Activate` on the window until it succeeds or `deadline` passes.
+fn activate_until_deadline(winid: u32, deadline_from_now: Duration) {
+    let id = winid.to_string();
+    let deadline = std::time::Instant::now() + deadline_from_now;
+    while std::time::Instant::now() < deadline {
+        if gdbus("Activate", &[&id]).is_some() {
+            tracing::debug!(winid, "window_move: popup focused");
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    tracing::debug!(
+        winid,
+        "window_move: Activate unsupported by installed window-calls version"
+    );
+}
+
+/// Move the popup window to (x, y), and — once the position has survived
+/// Mutter's late placement override — focus it. Focusing FIRST races the
+/// placement fight: Activate fires while the window is still configuring
+/// (ignored) or expires before the move settles, and the popup ends up
+/// BELOW other windows. Fire-and-forget.
 /// mapping — the extension only sees windows Mutter already knows about —
 /// and then re-applies the position for a short hold, because the
 /// compositor's own initial placement can land *after* our move (late
@@ -216,8 +270,10 @@ pub fn move_popup_async(x: i32, y: i32) {
             }
             std::thread::sleep(Duration::from_millis(40));
         }
-        // Position applied (or hold expired) — the popup may render.
+        // Position applied (or hold expired) — the popup may render. Focus
+        // LAST, strictly after placement settled: see the doc above.
         PLACED.store(true, Ordering::Release);
+        activate_until_deadline(winid, Duration::from_millis(1500));
     });
 }
 
