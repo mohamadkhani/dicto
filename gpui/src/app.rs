@@ -563,15 +563,25 @@ fn open_translate_popup(state: &Entity<DictState>, cx: &mut gpui::App) -> anyhow
     // fixed heights, so the estimate lands within a few px; the poll tick
     // corrects the remainder from the real painted measurements. Resizable
     // as an escape hatch.
+    //
+    // Prefer the MEASURED height from the previous open of the same content
+    // shape — opening at the exact size means no resize after the first
+    // paint, which used to land inside GNOME's open animation and read as a
+    // janky, slow open. Falls back to the constant-based estimate.
     let status = state
         .read(cx)
         .quick_translate_engine
         .as_ref()
         .map(|e| e.popup_status().clone());
-    let initial_height =
-        crate::components::translate_popup::estimated_window_height(match &status {
-            Some(crate::quick_translate::PopupStatus::Visible(popup_state)) => Some(popup_state),
-            _ => None,
+    let shape_key = crate::components::translate_popup::shape_fingerprint(state.read(cx));
+    let initial_height = crate::components::translate_popup::cached_shape_height(&shape_key)
+        .unwrap_or_else(|| {
+            crate::components::translate_popup::estimated_window_height(match &status {
+                Some(crate::quick_translate::PopupStatus::Visible(popup_state)) => {
+                    Some(popup_state)
+                }
+                _ => None,
+            })
         });
     let mut bounds = Bounds::centered(None, size(px(460.), px(initial_height)), cx);
     // Reopen where the user last dragged the popup — but only if that spot
@@ -596,7 +606,11 @@ fn open_translate_popup(state: &Entity<DictState>, cx: &mut gpui::App) -> anyhow
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             window_decorations: Some(WindowDecorations::Client),
             titlebar: Some(gpui::TitlebarOptions {
-                title: Some("Dicto Translate".into()),
+                // Generation-tagged ("Dicto Translate #N"): the GNOME
+                // extension lookups match the CURRENT generation's title,
+                // so a dying previous popup (same pid, same plain title)
+                // can never steal the Move/Activate meant for this window.
+                title: Some(crate::window_move::next_popup_title().into()),
                 ..Default::default()
             }),
             kind: WindowKind::PopUp,
@@ -640,6 +654,21 @@ fn open_translate_popup(state: &Entity<DictState>, cx: &mut gpui::App) -> anyhow
         s.qt_popup_window = Some(handle);
         s.qt_replace_pending = false;
     });
+
+    // Authoritative raise FIRST: when the trigger came from a GNOME custom
+    // keyboard shortcut (`dicto --lookup`), the IPC client forwarded the
+    // compositor-minted XDG_ACTIVATION_TOKEN — attaching it to the fresh
+    // surface raises+focuses the popup through the protocol's own grant,
+    // independent of the window-calls `Activate` fallback (which Mutter
+    // may decline under focus-stealing prevention when the user was just
+    // interacting with the foreground app).
+    if let Some(token) = crate::take_ipc_activation_token() {
+        let _ = handle.update(cx, |_, window, cx| {
+            window.activate_with_token(&token);
+            cx.notify();
+        });
+        tracing::info!("translate popup: raised with IPC activation token");
+    }
 
     // Restore the last dragged position (GNOME Wayland: via the
     // window-calls shell extension; X11's requested origin above

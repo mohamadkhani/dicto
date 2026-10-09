@@ -76,6 +76,36 @@ pub fn take_tray_translate_token() -> Option<String> {
         .and_then(|mut g| g.take())
 }
 
+/// Compositor-minted xdg-activation token forwarded by a `dicto --lookup` /
+/// `dicto --translate` IPC client. GNOME custom keyboard shortcuts launch
+/// the command WITH `XDG_ACTIVATION_TOKEN` in the environment (Mutter mints
+/// one per keybinding press); the short-lived CLI client forwards it over
+/// the socket so the MAIN instance can raise the popup through the
+/// activation protocol's own grant. It is the deterministic raise path;
+/// without it the popup relies on the window-calls extension's `Activate`,
+/// which Mutter may decline under focus-stealing prevention.
+static IPC_ACTIVATION_TOKEN: std::sync::OnceLock<std::sync::Mutex<Option<String>>> =
+    std::sync::OnceLock::new();
+
+fn ipc_activation_token() -> &'static std::sync::Mutex<Option<String>> {
+    IPC_ACTIVATION_TOKEN.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Stash the activation token sent by an IPC client.
+pub fn set_ipc_activation_token(token: Option<String>) {
+    if let Ok(mut g) = ipc_activation_token().lock() {
+        *g = token;
+    }
+}
+
+/// Take the stashed IPC activation token (last writer wins, one-shot).
+pub fn take_ipc_activation_token() -> Option<String> {
+    ipc_activation_token()
+        .lock()
+        .ok()
+        .and_then(|mut g| g.take())
+}
+
 /// Path to an IPC socket used by `dicto --translate` / `dicto --lookup` to
 /// signal a running instance. Lives in the user's runtime directory.
 #[cfg(target_os = "linux")]
@@ -97,7 +127,21 @@ fn send_ipc_trigger(socket_name: &str) -> Result<(), String> {
 
     let path = ipc_socket_path(socket_name);
     match UnixStream::connect(&path) {
-        Ok(mut stream) => stream.write_all(b"trigger\n").map_err(|e| e.to_string()),
+        Ok(mut stream) => {
+            // Line 1: the trigger. Line 2 (optional): the compositor-minted
+            // activation token from our environment — present when GNOME
+            // launched us from a keyboard shortcut. Old servers ignore the
+            // extra line; new servers use it to raise the popup reliably.
+            let mut msg = String::from("trigger\n");
+            if let Ok(token) = std::env::var("XDG_ACTIVATION_TOKEN")
+                && !token.is_empty()
+            {
+                msg.push_str("token ");
+                msg.push_str(&token);
+                msg.push('\n');
+            }
+            stream.write_all(msg.as_bytes()).map_err(|e| e.to_string())
+        }
         Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => Err(format!(
             "stale IPC socket at {} — a previous Dicto instance exited \
              without cleanup. Quit and restart Dicto to fix it. ({e})",
@@ -137,9 +181,19 @@ fn spawn_ipc_server(
         .spawn(move || {
             use std::io::Read;
             for stream in listener.incoming() {
-                let Ok(mut stream) = stream else { continue };
-                let mut buf = [0u8; 32];
-                if stream.read(&mut buf).unwrap_or(0) > 0 {
+                let Ok(stream) = stream else { continue };
+                // The client writes its lines and drops the connection, so
+                // read to EOF (bounded) and parse. Any content is a trigger.
+                let mut msg = String::new();
+                if stream.take(4096).read_to_string(&mut msg).unwrap_or(0) > 0 {
+                    if let Some(token) = msg
+                        .lines()
+                        .find_map(|l| l.strip_prefix("token "))
+                        .map(str::to_string)
+                        && !token.is_empty()
+                    {
+                        set_ipc_activation_token(Some(token));
+                    }
                     flag.store(true, Ordering::Release);
                 }
             }

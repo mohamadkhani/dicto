@@ -6,8 +6,8 @@
 //! exposes the needed D-Bus methods on GNOME Shell's bus; we call them via
 //! the `gdbus` CLI to avoid a D-Bus dependency:
 //!
-//! - [`find_popup_winid`] locates the popup by exact title + pid among
-//!   `List`'s JSON windows.
+//! - [`find_popup_winid`] locates the popup by its generation-tagged title
+//!   (unique per open) + pid among `List`'s JSON windows.
 //! - [`save_popup_rect`] reads the popup's frame rect right before it
 //!   closes and stores it in this process. Bounded: the window dies right
 //!   after, so the query cannot be fully async.
@@ -27,8 +27,29 @@ const DBUS_DEST: &str = "org.gnome.Shell";
 const DBUS_PATH: &str = "/org/gnome/Shell/Extensions/Windows";
 const DBUS_IFACE: &str = "org.gnome.Shell.Extensions.Windows";
 
-/// Title the popup window is created with (see `open_translate_popup`).
-const POPUP_TITLE: &str = "Dicto Translate";
+/// Title prefix for popup windows (see `open_translate_popup`);
+/// [`next_popup_title`] appends a unique generation number.
+const POPUP_TITLE_PREFIX: &str = "Dicto Translate #";
+
+/// Generation counter for popup window titles. Bumped by
+/// [`next_popup_title`] on each open; [`find_popup_winid`] matches the
+/// CURRENT generation's full title. During the replace flow (old popup
+/// dying while the new one maps, both alive in the extension's `List`
+/// with the same pid) a plain-title match can resolve to the STALE
+/// window, sending `Move`/`Activate` to the dead one while the fresh
+/// popup waits unmoved and unraised. The generation tag makes that
+/// impossible: a previous window can never match the current needle.
+static POPUP_GEN: AtomicU64 = AtomicU64::new(0);
+
+/// Mint the title for the popup window being opened — "Dicto Translate #N"
+/// with N unique per open. `open_translate_popup` puts this into
+/// `WindowOptions`; the extension-side finders match it exactly.
+pub fn next_popup_title() -> String {
+    // Post-increment: the counter always holds the number in the LIVE
+    // window's title — `find_popup_winid` matches exactly that value.
+    let n = POPUP_GEN.fetch_add(1, Ordering::AcqRel) + 1;
+    format!("{POPUP_TITLE_PREFIX}{n}")
+}
 
 /// Stored frame-rect origin from the last close; `SAVED` gates validity.
 static SAVED_X: AtomicU64 = AtomicU64::new(0);
@@ -40,17 +61,42 @@ static SAVED: AtomicBool = AtomicBool::new(false);
 /// never sees the window flash at the compositor's default spot first.
 static PLACED: AtomicBool = AtomicBool::new(true);
 
+/// Deadline (ms since the Unix epoch) after which [`is_placed`] turns
+/// true even if the mover thread never confirmed placement. A stuck
+/// `PLACED=false` would otherwise leave the popup invisible forever —
+/// present in the GNOME dock as an "opening" window, but with nothing
+/// (or a zero-dimension surface) on screen.
+static PLACE_DEADLINE_MS: AtomicU64 = AtomicU64::new(0);
+
 /// Call when a popup window is about to open. `restore` tells whether a
 /// move to a saved position is pending — with nothing to restore the popup
 /// is renderable immediately.
 pub fn begin_popup_placement(restore: bool) {
     PLACED.store(!restore, Ordering::Release);
+    if restore {
+        // Covers the mover's full budget (find ≤1s + 250ms + hold ≤450ms)
+        // plus slack; only a dead/misbehaved mover ever hits it.
+        let deadline = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64 + 2000)
+            .unwrap_or(0);
+        PLACE_DEADLINE_MS.store(deadline, Ordering::Release);
+    }
 }
 
-/// Whether the popup may render (its position is final or was never
-/// deferred).
+/// Whether the popup may render (its position is final, was never
+/// deferred, or the placement deadline expired — the popup must never
+/// stay invisible because a mover thread died or mismatched).
 pub fn is_placed() -> bool {
-    PLACED.load(Ordering::Acquire)
+    if PLACED.load(Ordering::Acquire) {
+        return true;
+    }
+    let deadline = PLACE_DEADLINE_MS.load(Ordering::Acquire);
+    deadline == 0
+        || std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64 > deadline)
+            .unwrap_or(true)
 }
 
 /// Whether the placement hint is worth showing at all: only GNOME Wayland
@@ -95,13 +141,18 @@ fn gdbus(method: &str, args: &[&str]) -> Option<String> {
 }
 
 /// The popup's window id from the extension's `List` JSON: the one entry
-/// whose exact title is ours and whose pid matches this process.
+/// whose title is the CURRENT generation's (see [`POPUP_GEN`]) and whose
+/// pid matches this process.
 fn find_popup_winid() -> Option<u32> {
     let list = gdbus("List", &[])?;
     let pid = std::process::id().to_string();
     let pid_field = format!("\"pid\":{pid}");
+    let title_field = format!(
+        "\"title\":\"{POPUP_TITLE_PREFIX}{}\"",
+        POPUP_GEN.load(Ordering::Acquire)
+    );
     for entry in list.split("},{") {
-        if entry.contains(POPUP_TITLE) && entry.contains(&pid_field) {
+        if entry.contains(&title_field) && entry.contains(&pid_field) {
             let id = entry
                 .split("\"id\":")
                 .nth(1)?
@@ -219,14 +270,15 @@ fn activate_until_deadline(winid: u32, deadline_from_now: Duration) {
 }
 
 /// Move the popup window to (x, y), and — once the position has survived
-/// Mutter's late placement override — focus it. Focusing FIRST races the
-/// placement fight: Activate fires while the window is still configuring
-/// (ignored) or expires before the move settles, and the popup ends up
-/// BELOW other windows. Fire-and-forget.
-/// mapping — the extension only sees windows Mutter already knows about —
-/// and then re-applies the position for a short hold, because the
-/// compositor's own initial placement can land *after* our move (late
-/// first-configure) and would otherwise win. Fire-and-forget.
+/// Mutter's late placement override — focus it.
+///
+/// The move waits for the window to appear in the extension's `List` — the
+/// extension only sees windows Mutter already knows about — and then
+/// re-applies the position for a short hold, because the compositor's own
+/// initial placement can land *after* our move (late first-configure) and
+/// would otherwise win. Focusing FIRST would race that placement fight:
+/// Activate fires while the window is still configuring (ignored) or
+/// expires before the move settles. Fire-and-forget.
 pub fn move_popup_async(x: i32, y: i32) {
     std::thread::spawn(move || {
         let mut winid = None;
@@ -242,6 +294,14 @@ pub fn move_popup_async(x: i32, y: i32) {
         let Some(winid) = winid else {
             tracing::debug!(x, y, "window_move: popup never appeared to move");
             PLACED.store(true, Ordering::Release);
+            // The move failed (extension slow/absent, window slow to map)
+            // but the fresh popup still MUST be raised: as a background
+            // app, Mutter denies its freshly-mapped window keyboard focus,
+            // so without an Activate it opens BELOW other windows. Bounded
+            // retry; no-ops without the extension.
+            if let Some(id) = wait_popup_winid() {
+                activate_until_deadline(id, Duration::from_millis(1000));
+            }
             return;
         };
         tracing::debug!(winid, x, y, "window_move: popup moved");

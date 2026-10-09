@@ -14,7 +14,9 @@ pub(crate) mod playback;
 pub(crate) mod sections;
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::{LazyLock, Mutex};
 
 use gpui::{
     AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
@@ -128,6 +130,90 @@ pub(crate) fn probe(y: Rc<Cell<Option<f32>>>) -> gpui::AnyElement {
 /// window would produce when the poll tick first resizes it (window resizes
 /// anchor the top edge, so a shrink visibly moves the whole popup upward).
 /// The tick still corrects the last few px from the real measurements.
+/// Memoized natural content heights keyed by a shape fingerprint of the
+/// popup state (kind + word length + dictionary count). Opening at the
+/// MEASURED height removes the post-open resize, which used to land inside
+/// GNOME's open animation and read as a janky, slow popup open. First-ever
+/// open of a shape still resizes once from the constant-based estimate.
+pub(crate) static MEASURED_HEIGHTS: LazyLock<Mutex<HashMap<String, f32>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+pub(crate) fn cached_shape_height(key: &str) -> Option<f32> {
+    MEASURED_HEIGHTS.lock().unwrap().get(key).copied()
+}
+
+pub(crate) fn remember_shape_height(key: &str, height: f32) {
+    MEASURED_HEIGHTS
+        .lock()
+        .unwrap()
+        .insert(key.to_string(), height);
+}
+
+/// A stable-enough key for "content that should render at the same natural
+/// height": popup kind + word length + dictionary/tab count.
+pub(crate) fn shape_fingerprint(state: &DictState) -> String {
+    if let Some(crate::quick_translate::PopupStatus::Visible(ps)) = state
+        .quick_translate_engine
+        .as_ref()
+        .map(|e| e.popup_status())
+    {
+        return match ps {
+            PopupState::Ready {
+                original,
+                translation,
+                ..
+            } => format!("qt-ready-{}-{}", original.len(), translation.len()),
+            PopupState::Loading { original } => format!("qt-loading-{}", original.len()),
+            PopupState::Error { original, .. } => format!("qt-error-{}", original.len()),
+            PopupState::TooLong { original } => format!("qt-toolong-{}", original.len()),
+            PopupState::Idle { original } => format!("qt-idle-{}", original.len()),
+            PopupState::LookupLoading { word } => format!("wl-loading-{}", word.chars().count()),
+            PopupState::LookupReady {
+                word,
+                results,
+                active,
+            } => format!(
+                "wl-ready-{}-{}-{}",
+                word.chars().count(),
+                results.len(),
+                active
+            ),
+            PopupState::LookupNotFound { word } => format!("wl-notfound-{}", word.chars().count()),
+            PopupState::LookupDisabled => "wl-disabled".into(),
+            PopupState::LookupError { .. } => "wl-error".into(),
+        };
+    }
+    if let Some(wl) = state.word_lookup_engine.as_ref() {
+        use crate::word_lookup::LookupState;
+        return match wl.status() {
+            crate::word_lookup::LookupStatus::Visible(LookupState::Ready {
+                word,
+                results,
+                active,
+            }) => format!(
+                "wl-ready-{}-{}-{}",
+                word.chars().count(),
+                results.len(),
+                active
+            ),
+            crate::word_lookup::LookupStatus::Visible(LookupState::Loading { word }) => {
+                format!("wl-loading-{}", word.chars().count())
+            }
+            crate::word_lookup::LookupStatus::Visible(LookupState::NotFound { word }) => {
+                format!("wl-notfound-{}", word.chars().count())
+            }
+            crate::word_lookup::LookupStatus::Visible(LookupState::Disabled) => {
+                "wl-disabled".into()
+            }
+            crate::word_lookup::LookupStatus::Visible(LookupState::Error { .. }) => {
+                "wl-error".into()
+            }
+            crate::word_lookup::LookupStatus::Hidden => "hidden".into(),
+        };
+    }
+    "idle".into()
+}
+
 pub(crate) fn estimated_window_height(state: Option<&PopupState>) -> f32 {
     use PopupState as PS;
     const CHROME: f32 = 26. + TITLE_BAR_H; // 2 window borders + the title
@@ -723,6 +809,10 @@ pub struct TranslatePopupView {
     applied_height: Option<f32>,
     /// Ticks elapsed since the last (unconfirmed) resize request.
     unsettled_ticks: u8,
+    /// The PLACED render-gate value seen by the last poll tick. The tick
+    /// notifies when it changes so the popup repaints the moment deferred
+    /// placement completes — see the tick body for why nothing else would.
+    last_placed_gate: Option<bool>,
 
     /// EDITABLE ORIGINAL editor — always rendered in the Original section.
     /// Kept in sync with the engine's original (see `render`).
@@ -764,10 +854,17 @@ impl TranslatePopupView {
         // stops once the window is gone (update returns Err).
         let poll_state = state.clone();
         cx.spawn_in(window, async move |this, cx| {
+            // First tick runs IMMEDIATELY: the window maps at the cached
+            // (or estimated) height and the measured correction must land
+            // before GNOME's open animation finishes, not 100 ms into it.
+            let mut first_tick = true;
             loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(100))
-                    .await;
+                if !first_tick {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(100))
+                        .await;
+                }
+                first_tick = false;
                 let Ok(()) = cx.update(|window, cx| {
                     // Notify ONLY while audio is playing/loading: the seek
                     // bar and word highlight need the ~10 Hz repaint. When
@@ -812,14 +909,23 @@ impl TranslatePopupView {
                         };
                         if settled {
                             view.unsettled_ticks = 0;
-                            if let Some(desired) = view.measure.desired_window_height()
-                                && view
+                            if let Some(desired) = view.measure.desired_window_height() {
+                                // Feed the measured height back into the
+                                // shape cache under the CURRENT state's
+                                // fingerprint (the view may have moved from
+                                // Loading to Ready since it was created) —
+                                // the next open of similar content starts
+                                // at this exact height.
+                                let key = shape_fingerprint(poll_state.read(cx));
+                                remember_shape_height(&key, desired);
+                                if view
                                     .applied_height
                                     .is_none_or(|applied| (applied - desired).abs() > 0.5)
-                            {
-                                window.resize(gpui::size(px(460.), px(desired)));
-                                view.applied_height = Some(desired);
-                                view.unsettled_ticks = 1;
+                                {
+                                    window.resize(gpui::size(px(460.), px(desired)));
+                                    view.applied_height = Some(desired);
+                                    view.unsettled_ticks = 1;
+                                }
                             }
                         } else {
                             // Give the compositor a few ticks to apply the
@@ -832,9 +938,22 @@ impl TranslatePopupView {
                                 view.unsettled_ticks = 0;
                             }
                         }
+                        // The window-calls mover thread flips the PLACED
+                        // gate (placement settled) from a raw thread that
+                        // cannot notify GPUI. Watch for the transition
+                        // here: without this notify, an IDLE popup (no
+                        // audio playing) never re-renders after the gate
+                        // opens — it keeps its first, deliberately-empty
+                        // TRANSPARENT frame forever and only becomes
+                        // visible when some input event (mouse move)
+                        // happens to force a repaint. Same for the
+                        // deadline safety net: any gate change repaints.
+                        let placed = crate::window_move::is_placed();
+                        let gate_opened = view.last_placed_gate.is_some_and(|last| last != placed);
+                        view.last_placed_gate = Some(placed);
                         // Idle ticks stay silent: no notify, no re-render —
                         // the popup's layout (and click hitboxes) stays put.
-                        if busy {
+                        if busy || gate_opened {
                             cx.notify();
                         }
                     });
@@ -894,6 +1013,7 @@ impl TranslatePopupView {
             measure: MeasureProbes::default(),
             applied_height: None,
             unsettled_ticks: 0,
+            last_placed_gate: None,
             original_editor,
             translation_editor,
             last_pushed_original: None,

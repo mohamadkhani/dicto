@@ -214,8 +214,12 @@ task.
 ### Live-position polling
 
 `TranslatePopupView::new` spawns a 100 ms loop that calls `poll_progress()` on
-**both** controllers and notifies the view, so both seek bars track live and
-`Playing → Ended` is observed without the user interacting.
+**both** controllers, resizes the window to the measured content height
+(`MeasureProbes`), and notifies the view **while audio is playing/loading**
+(seek bar + word highlight need the ~10 Hz repaint) and **whenever the
+window-move placement gate changes** — the popup must repaint the moment its
+deferred placement settles, even when no audio is active. Idle ticks stay
+silent so the popup's hitboxes never shift under the cursor mid-click.
 
 ---
 
@@ -225,11 +229,22 @@ The popup is its own GPUI window holding a `TranslatePopupView`
 ([gpui/src/components/translate_popup.rs:874](../gpui/src/components/translate_popup.rs#L874)).
 
 - **Open:** `open_translate_popup`
-  ([gpui/src/app.rs:457](../gpui/src/app.rs#L457)) — if a window already exists,
-  it activates it; otherwise it opens a 460×(estimated-height) window
-  (`WindowKind::PopUp`, `app_id: "dicto"`, `is_resizable`, client decorations)
-  and stores the `WindowHandle` in `DictState::qt_popup_window`. Called when
-  `trigger_translate` returns `true`.
+  (gpui/src/app.rs) — opens a 460×(estimated-or-cached-height) window
+  (`WindowKind::PopUp`, `app_id: "dicto"`, `is_resizable`, client
+  decorations) and stores the `WindowHandle` in `DictState::qt_popup_window`.
+  A **re-trigger while the popup is open** (hotkey / IPC, no tray token)
+  closes the window and a fresh one opens on the next poll tick — freshly
+  mapped windows get keyboard focus on GNOME/Mutter, re-activated ones
+  don't. A **tray click** (compositor-minted activation token) instead
+  raises and focuses the existing window.
+- **Raising:** three layered paths. (1) The IPC client (`dicto --translate`
+  / `dicto --lookup`) forwards the `XDG_ACTIVATION_TOKEN` env var over the
+  socket (GNOME custom shortcuts set it when they launch the command); the
+  fresh window activates with it via `xdg-activation` — the protocol's own
+  grant, independent of focus-stealing prevention. (2) The tray token (same
+  mechanism, minted by the tray host at click time). (3) The window-calls
+  extension's `Activate` as the fallback when no token exists (terminal
+  triggers, other compositors' setups).
 - **Placement:** on X11 `WindowKind::PopUp` is an override-redirect window
   that honors the requested origin — the last user-dragged position
   (`DictState::qt_popup_pos`, recorded by the popup view's bounds observer)
@@ -241,6 +256,15 @@ The popup is its own GPUI window holding a `TranslatePopupView`
   closes (synchronously — the window dies moments later), the popup stays
   invisible until it has been moved to the stored spot, and a short hold
   re-applies the position if the compositor's initial placement lands late.
+  The extension matches the popup by its **generation-tagged title**
+  (`"Dicto Translate #N"`, unique per open): during a re-trigger replace the
+  dying old window and the mapping new one coexist in the extension's list,
+  and a plain-title match could send `Move`/`Activate` to the dead one.
+  Two safety nets keep the deferred render from hanging: the 100 ms poll
+  tick **notifies on the placed-gate transition** (the raw mover thread
+  cannot notify GPUI itself — without this an idle popup kept its first,
+  fully transparent frame until a mouse move happened to force a repaint),
+  and a ~2 s deadline force-opens the gate if the mover thread dies.
   Without the extension the popup opens wherever the compositor puts it. On
   GNOME Wayland the app probes for the extension at startup and shows a
   dismissible banner (persisted in `settings.toml` as
@@ -379,12 +403,13 @@ Both are no-ops under `NullTelemetry` when the user has not opted in. See
 | File | Role |
 |---|---|
 | [gpui/src/quick_translate.rs](../gpui/src/quick_translate.rs) | Orchestrator: hotkey poll, trigger, translate, popup status. |
-| [gpui/src/components/translate_popup.rs](../gpui/src/components/translate_popup.rs) | Popup view, states, two playback slots, seek bar, Options panel. |
+| [gpui/src/components/translate_popup/](../gpui/src/components/translate_popup/) | Popup view, states, two playback slots, seek bar, Options panel, lookup UI. |
+| [gpui/src/window_move.rs](../gpui/src/window_move.rs) | GNOME Wayland placement via the window-calls extension: generation-tagged window matching, saved-position restore, activation fallback. |
 | [gpui/src/playback.rs](../gpui/src/playback.rs) | `PlaybackController` + `PlaybackState`. |
 | [gpui/src/tts.rs](../gpui/src/tts.rs) | AI TTS + platform espeak synthesis. |
 | [gpui/src/selection.rs](../gpui/src/selection.rs) | Primary/clipboard selection reading. |
 | [gpui/src/hotkey/](../gpui/src/hotkey/) | X11, Wayland-portal, and tray-fallback hotkey backends. |
-| [gpui/src/components/quick_translate_panel.rs](../gpui/src/components/quick_translate_panel.rs) | Settings tab UI. |
+| [gpui/src/components/quick_translate_panel.rs](../gpui/src/quick_translate_panel.rs) | Settings tab UI. |
 | [gpui/src/state.rs](../gpui/src/state.rs) | `DictState`: holds the engine + the two playback controllers + `qt_popup_window`. |
 | [src/settings/mod.rs](../src/settings/mod.rs) | `QuickTranslateSettings` + `TtsSettings`. |
 
