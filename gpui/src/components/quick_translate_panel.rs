@@ -392,6 +392,13 @@ pub fn quick_translate_tab_content(
     }
     body = body.child(wl_note);
 
+    // System Shortcuts section (Linux only — the auto-definition layer).
+    #[cfg(target_os = "linux")]
+    {
+        body = body.child(divider());
+        body = body.child(system_shortcuts_section(&state, cx));
+    }
+
     // Outer div participates in the parent's flex layout (flex_1 = remaining
     // height). The overflow wrapper from overflow_y_scroll loses flex_grow, so
     // we separate the two concerns: outer = flex sizing, inner = h_full scroll.
@@ -404,6 +411,103 @@ pub fn quick_translate_tab_content(
 }
 
 // --- Helper widgets ---
+
+/// "System Shortcuts" section: the auto-definition toggle plus the live
+/// status of the OS-level shortcut layer (portal / GNOME keybindings /
+/// manual snippet). Backed by `hotkey::os_binding`.
+#[cfg(target_os = "linux")]
+fn system_shortcuts_section(state: &Entity<DictState>, cx: &gpui::App) -> gpui::AnyElement {
+    let auto_shortcuts = state.read(cx).auto_shortcuts;
+    let toggle_state = state.clone();
+    let auto_row = h_flex()
+        .justify_between()
+        .items_center()
+        .py(px(10.))
+        .child(
+            div()
+                .text_size(px(13.))
+                .text_color(colors::text())
+                .child(SharedString::from("Set up system shortcuts automatically")),
+        )
+        .child(toggle_switch("auto-shortcuts", auto_shortcuts, move |cx| {
+            toggle_state.update(cx, |s, cx| {
+                s.auto_shortcuts = !auto_shortcuts;
+                s.save_settings(cx);
+                s.sync_os_bindings();
+            });
+        }));
+
+    let intro = div()
+        .text_size(px(11.))
+        .text_color(colors::text_secondary())
+        .child(SharedString::from(
+            "Dicto can register its global shortcuts with the desktop itself, \
+             so they work from anywhere — no manual setup.",
+        ));
+
+    let mut section = v_flex().gap(px(4.)).child(intro).child(auto_row);
+
+    match crate::hotkey::os_binding::status() {
+        None => {
+            section = section.child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(colors::text_secondary())
+                    .child(SharedString::from("Setting up shortcuts…")),
+            );
+        }
+        Some(status) => {
+            let mode_line = match status.mode {
+                crate::hotkey::os_binding::OsBindingMode::Off => "Off".to_string(),
+                crate::hotkey::os_binding::OsBindingMode::PortalManaged => {
+                    "Managed by the desktop portal".to_string()
+                }
+                crate::hotkey::os_binding::OsBindingMode::NativeRegistration => {
+                    "Registered with the window system".to_string()
+                }
+                crate::hotkey::os_binding::OsBindingMode::GnomeKeybindings => {
+                    "Set in GNOME custom shortcuts".to_string()
+                }
+                crate::hotkey::os_binding::OsBindingMode::ManualRequired => {
+                    "Manual setup required".to_string()
+                }
+            };
+            let mut text = format!("System shortcuts: {mode_line}");
+            for action in &status.actions {
+                text.push('\n');
+                text.push_str(action);
+            }
+            if !status.detail.is_empty() {
+                text.push('\n');
+                text.push_str(&status.detail);
+            }
+
+            section = section.child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(colors::text_secondary())
+                    .child(SharedString::from(text)),
+            );
+
+            if let Some(snippet) = status.snippet {
+                section = section.child(
+                    div()
+                        .mt(px(6.))
+                        .p(px(8.))
+                        .rounded(px(4.))
+                        .bg(colors::bg())
+                        .border_1()
+                        .border_color(colors::border())
+                        .text_size(px(10.))
+                        .text_color(colors::text())
+                        .child(SharedString::from(snippet)),
+                );
+            }
+        }
+    }
+
+    section.into_any_element()
+}
 
 fn section_title(text: &str) -> gpui::AnyElement {
     div()

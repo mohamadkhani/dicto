@@ -44,6 +44,77 @@ pub fn parse_hotkey(s: &str) -> Result<ParsedHotkey, HotkeyError> {
     Ok(ParsedHotkey { modifiers, key })
 }
 
+/// Convert a user-facing hotkey string like `"Ctrl+Alt+D"` into a GTK
+/// accelerator — the format both the XDG GlobalShortcuts portal
+/// (`preferred_trigger`) and GNOME's custom-keybinding `binding` field
+/// expect, e.g. `"<Control><Alt>d"`.
+///
+/// Returns `Err` for the same inputs [`parse_hotkey`] rejects.
+pub fn to_gtk_accel(s: &str) -> Result<String, HotkeyError> {
+    let mut out = String::new();
+    let mut key: Option<String> = None;
+
+    for part in s.split('+') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let modifier = match part.to_lowercase().as_str() {
+            "ctrl" | "control" => Some("<Control>"),
+            "alt" | "opt" | "option" => Some("<Alt>"),
+            "shift" => Some("<Shift>"),
+            "super" | "win" | "cmd" | "command" | "meta" => Some("<Super>"),
+            _ => None,
+        };
+        match modifier {
+            Some(tag) => {
+                if key.is_some() {
+                    // Modifier after the key: "Ctrl+D+Alt" is malformed.
+                    return Err(HotkeyError::InvalidHotkey(format!(
+                        "modifier '{part}' after key in '{s}'"
+                    )));
+                }
+                out.push_str(tag);
+            }
+            None => {
+                if key.is_some() {
+                    return Err(HotkeyError::InvalidHotkey(format!(
+                        "multiple keys in '{s}'"
+                    )));
+                }
+                key = Some(accel_key_name(part, s)?);
+            }
+        }
+    }
+
+    let key = key.ok_or_else(|| HotkeyError::InvalidHotkey(format!("no key found in '{s}'")))?;
+    out.push_str(&key);
+    Ok(out)
+}
+
+/// Normalize the key part of an accelerator: single characters stay as-is
+/// (lowercased, per GTK convention), named keys get their canonical spelling.
+fn accel_key_name(name: &str, original: &str) -> Result<String, HotkeyError> {
+    let lower = name.to_lowercase();
+    let mut chars = lower.chars();
+    if let (Some(first), None) = (chars.next(), chars.next()) {
+        // Single character: letters/digits/punctuation are valid GTK keys.
+        return Ok(first.to_string());
+    }
+    match lower.as_str() {
+        "space" => Ok("space".into()),
+        "enter" | "return" => Ok("Return".into()),
+        "escape" | "esc" => Ok("Escape".into()),
+        "tab" => Ok("Tab".into()),
+        f if f.len() >= 2 && f.starts_with('f') && f[1..].chars().all(|c| c.is_ascii_digit()) => {
+            Ok(format!("F{}", &f[1..]))
+        }
+        _ => Err(HotkeyError::InvalidHotkey(format!(
+            "unsupported key: '{name}' in '{original}'"
+        ))),
+    }
+}
+
 /// Map a key name string to a `Code` enum variant.
 fn key_name_to_code(name: &str) -> Result<Code, HotkeyError> {
     let upper = name.to_uppercase();
@@ -137,5 +208,27 @@ mod tests {
         assert!(parse_hotkey("Ctrl+Alt+").is_err());
         assert!(parse_hotkey("Ctrl+F5").is_ok());
         assert!(parse_hotkey("just_a_key").is_err());
+    }
+
+    #[test]
+    fn test_accel_ctrl_alt_d() {
+        assert_eq!(to_gtk_accel("Ctrl+Alt+D").unwrap(), "<Control><Alt>d");
+    }
+
+    #[test]
+    fn test_accel_order_and_super() {
+        assert_eq!(
+            to_gtk_accel("Super+Shift+Space").unwrap(),
+            "<Super><Shift>space"
+        );
+        assert_eq!(to_gtk_accel("Ctrl+Alt+F5").unwrap(), "<Control><Alt>F5");
+        assert_eq!(to_gtk_accel("Alt+1").unwrap(), "<Alt>1");
+    }
+
+    #[test]
+    fn test_accel_invalid() {
+        assert!(to_gtk_accel("Ctrl+Alt+").is_err());
+        assert!(to_gtk_accel("just_a_key").is_err());
+        assert!(to_gtk_accel("Ctrl+D+Alt").is_err());
     }
 }

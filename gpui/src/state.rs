@@ -98,8 +98,13 @@ pub struct DictState {
     /// Word Lookup settings snapshot (loaded from disk, editable in UI).
     pub word_lookup: WordLookupSettings,
 
-    /// Hotkey backend identifier — "x11", "tray_menu", or "none".
+    /// Hotkey backend identifier — "x11", "xdg-portal", "tray_menu", or
+    /// "none".
     pub hotkey_backend: String,
+
+    /// Whether the app should define the OS-level shortcuts automatically
+    /// (portal / GNOME custom keybindings). Mirrors `Settings::auto_shortcuts`.
+    pub auto_shortcuts: bool,
 
     /// Quick Translate engine (hotkey + translator + popup state).
     ///
@@ -229,8 +234,9 @@ impl DictState {
             .as_ref()
             .map(|e| e.backend_name().to_string())
             .unwrap_or_else(|| "none".to_string());
+        let auto_shortcuts = settings.auto_shortcuts;
 
-        Self {
+        let state = Self {
             word_list_scroll: gpui::ScrollHandle::new(),
             results: Vec::new(),
             active_result: 0,
@@ -252,6 +258,7 @@ impl DictState {
             quick_translate: qt_settings,
             word_lookup: wl_settings,
             hotkey_backend: backend,
+            auto_shortcuts,
             quick_translate_engine: engine,
             word_lookup_engine,
             qt_api_key_input: None,
@@ -284,7 +291,42 @@ impl DictState {
             qt_models_autoloaded: false,
             playback_source: crate::playback::PlaybackController::default(),
             playback_translation: crate::playback::PlaybackController::default(),
-        }
+        };
+
+        // Reconcile the OS-level shortcut state with the settings on
+        // startup — the "auto keyboard shortcut definition" entry point.
+        state.sync_os_bindings();
+        state
+    }
+
+    /// Backend of whichever engine currently holds a hotkey manager — the
+    /// effective trigger layer (Quick Translate's manager when present, else
+    /// Word Lookup's).
+    fn effective_hotkey_backend(&self) -> String {
+        self.quick_translate_engine
+            .as_ref()
+            .map(|e| e.backend_name().to_string())
+            .or_else(|| {
+                self.word_lookup_engine
+                    .as_ref()
+                    .map(|e| e.backend_name().to_string())
+            })
+            .unwrap_or_else(|| "none".to_string())
+    }
+
+    /// Fire-and-forget reconciliation of the OS shortcut state (GNOME
+    /// custom keybindings etc.) with the current settings. Cheap to call
+    /// repeatedly — the work runs on a background thread and converges.
+    pub fn sync_os_bindings(&self) {
+        #[cfg(target_os = "linux")]
+        crate::hotkey::os_binding::sync(
+            &self.quick_translate,
+            &self.word_lookup,
+            self.auto_shortcuts,
+            &self.effective_hotkey_backend(),
+        );
+        #[cfg(not(target_os = "linux"))]
+        let _ = self.effective_hotkey_backend();
     }
 
     /// Whether the Quick Translate AI provider is fully configured:
@@ -316,6 +358,9 @@ impl DictState {
         } else {
             self.word_lookup_engine = Some(WordLookupEngine::new(wl_settings));
         }
+
+        // Keep the OS-level shortcuts in step with the new settings.
+        self.sync_os_bindings();
     }
 
     /// Reload the translator after settings change.
@@ -335,6 +380,7 @@ impl DictState {
         current.dictionaries = self.dictionaries.clone();
         current.quick_translate = self.quick_translate.clone();
         current.word_lookup = self.word_lookup.clone();
+        current.auto_shortcuts = self.auto_shortcuts;
         let _ = mdict_rs::settings::save(&current);
     }
 

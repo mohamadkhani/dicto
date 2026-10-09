@@ -250,10 +250,12 @@ impl AssetSource for AppAssets {
 fn main() {
     // Handle the `--translate` / `--lookup` CLI flags FIRST, before any GUI
     // init: a second invocation with one of these flags signals the
-    // already-running instance. This is the GNOME Wayland workaround for
-    // global hotkeys — the user binds a custom keyboard shortcut to
-    // `dicto --translate` / `dicto --lookup` in GNOME Settings → Keyboard →
-    // Custom Shortcuts.
+    // already-running instance. This is the GNOME Wayland path for global
+    // hotkeys: the app registers GNOME custom shortcuts bound to
+    // `dicto --translate` / `dicto --lookup` by itself (see
+    // `hotkey::os_binding`), and each keybinding press launches one of
+    // these short-lived clients, which forward the trigger (plus the
+    // compositor-minted activation token) to the running instance over IPC.
     let trigger_flag = std::env::args().find_map(|a| match a.as_str() {
         "--translate" | "-t" => Some(("dicto-translate.sock", "dicto: --translate")),
         "--lookup" | "-l" => Some(("dicto-lookup.sock", "dicto: --lookup")),

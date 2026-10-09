@@ -60,8 +60,12 @@ pub trait HotkeyManager: Send + Sync {
 
 /// Detect the best available hotkey backend at runtime and create a manager.
 ///
-/// On Linux Wayland: tries the XDG GlobalShortcuts portal, falls back to
-/// tray menu. On Linux X11 and on Windows: uses the `global-hotkey` crate.
+/// On Linux Wayland: the XDG GlobalShortcuts portal is the only working
+/// global-hotkey mechanism (X11 grabs only reach XWayland clients, never
+/// native Wayland apps), so a portal failure falls straight back to the tray
+/// menu — the OS-shortcut layer (`os_binding`) then covers the gap with
+/// GNOME custom keybindings where possible. On Linux X11 and on Windows:
+/// the `global-hotkey` crate.
 ///
 /// Note: `XDG_SESSION_TYPE` takes priority over the presence of `DISPLAY`,
 /// because Wayland compositors run XWayland (so `DISPLAY` is usually set
@@ -75,15 +79,16 @@ pub fn create_hotkey_manager() -> Box<dyn HotkeyManager> {
         info!(session_type = %session_type, "hotkey: detecting backend");
 
         if session_type == "wayland" || std::env::var("WAYLAND_DISPLAY").is_ok() {
-            match PortalHotkeyManager::new() {
-                Ok(manager) => {
+            return match portal::portal_handle() {
+                Some(manager) => {
                     info!("hotkey: using XDG Portal backend (Wayland)");
-                    return Box::new(manager);
+                    Box::new(manager)
                 }
-                Err(e) => {
-                    warn!(error = %e, "hotkey: XDG Portal backend failed, falling back to tray menu");
+                None => {
+                    warn!("hotkey: XDG Portal backend unavailable, using tray menu fallback");
+                    Box::new(FallbackHotkeyManager::new())
                 }
-            }
+            };
         }
 
         if session_type == "x11" || std::env::var("DISPLAY").is_ok() {
@@ -112,6 +117,12 @@ pub fn create_hotkey_manager() -> Box<dyn HotkeyManager> {
         }
     }
 
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        warn!("hotkey: no global hotkey backend available, using tray menu fallback");
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     warn!("hotkey: no global hotkey backend available, using tray menu fallback");
     Box::new(FallbackHotkeyManager::new())
 }
@@ -121,13 +132,15 @@ pub fn create_hotkey_manager() -> Box<dyn HotkeyManager> {
 pub mod fallback;
 pub use fallback::FallbackHotkeyManager;
 
+/// OS-level shortcut auto-definition (GNOME custom keybindings etc.).
+#[cfg(target_os = "linux")]
+pub mod os_binding;
+
 /// Hotkey-string parsing shared by `global-hotkey`-based backends.
 pub mod keys;
 
 #[cfg(target_os = "linux")]
 pub mod portal;
-#[cfg(target_os = "linux")]
-pub use portal::PortalHotkeyManager;
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub mod global_hotkey;

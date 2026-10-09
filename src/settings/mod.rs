@@ -15,7 +15,7 @@ use tracing::{info, warn};
 
 use crate::config::{APP_NAME, discover_mdx_files};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
     pub dictionaries: Vec<DictEntry>,
@@ -36,6 +36,12 @@ pub struct Settings {
     /// Same plain-data placement as `quick_translate`.
     #[serde(default)]
     pub word_lookup: WordLookupSettings,
+    /// Automatically define the OS-level shortcuts for the quick actions
+    /// (XDG GlobalShortcuts portal, or GNOME custom keybindings when the
+    /// portal is unavailable). Default on — the user should not have to
+    /// create shortcuts by hand.
+    #[serde(default = "default_auto_shortcuts")]
+    pub auto_shortcuts: bool,
     /// User dismissed the "install Window Calls" hint (GNOME Wayland popup
     /// placement). Persisted so it is shown at most once per decision.
     #[serde(default)]
@@ -44,6 +50,27 @@ pub struct Settings {
     /// Persisted so it is shown at most once per decision.
     #[serde(default)]
     pub ai_setup_hint_dismissed: bool,
+}
+
+impl Default for Settings {
+    /// Manual impl because `auto_shortcuts` defaults to ON — the derived
+    /// `Default` would give `false` for the bool.
+    fn default() -> Self {
+        Self {
+            dictionaries: Vec::new(),
+            telemetry_consent: TelemetryConsent::default(),
+            installation_id: None,
+            quick_translate: QuickTranslateSettings::default(),
+            word_lookup: WordLookupSettings::default(),
+            auto_shortcuts: default_auto_shortcuts(),
+            window_calls_hint_dismissed: false,
+            ai_setup_hint_dismissed: false,
+        }
+    }
+}
+
+fn default_auto_shortcuts() -> bool {
+    true
 }
 
 /// Three-state telemetry consent, persisted in settings.toml.
