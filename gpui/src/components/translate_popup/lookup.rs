@@ -38,6 +38,7 @@ pub(crate) fn lookup_body(
     ps: &LookupState,
     tts: &mdict_rs::settings::TtsSettings,
     pb: super::sections::PlaybackSnapshot,
+    related_scroll: &gpui::ScrollHandle,
 ) -> gpui::Div {
     match ps {
         LookupState::Loading { word } => v_flex()
@@ -49,6 +50,7 @@ pub(crate) fn lookup_body(
             word,
             results,
             active,
+            related,
         } => {
             let audio = results
                 .get(*active)
@@ -61,6 +63,14 @@ pub(crate) fn lookup_body(
                 state_entity.clone(),
                 pb,
             ));
+            // Fuzzy near-matches: horizontally scrollable selectable chips.
+            if !related.is_empty() {
+                col = col.child(related_words_row(
+                    related,
+                    state_entity.clone(),
+                    related_scroll,
+                ));
+            }
             // Tab strip only when more than one dictionary had a hit — a
             // single hit gets the whole card (same rule as the main window).
             if results.len() > 1 {
@@ -72,10 +82,20 @@ pub(crate) fn lookup_body(
             col
         }
 
-        LookupState::NotFound { word } => v_flex()
-            .gap(px(8.))
-            .child(word_header(word, None, tts, state_entity.clone(), pb))
-            .child(not_found_note()),
+        LookupState::NotFound { word, related } => {
+            let mut col = v_flex()
+                .gap(px(8.))
+                .child(word_header(word, None, tts, state_entity.clone(), pb))
+                .child(not_found_note());
+            if !related.is_empty() {
+                col = col.child(related_words_row(
+                    related,
+                    state_entity.clone(),
+                    related_scroll,
+                ));
+            }
+            col
+        }
 
         // Hint states — no word header; their action lives in the body.
         LookupState::Disabled => v_flex()
@@ -369,6 +389,100 @@ fn not_found_note() -> gpui::AnyElement {
         .child(SharedString::from(
             "No dictionary has this word. Translate it with AI instead?",
         ))
+        .into_any_element()
+}
+
+/// Horizontally scrollable row of selectable fuzzy near-match chips — the
+/// popup-side twin of the main window's suggestion list. Clicking a chip
+/// re-runs the lookup for that word (same engine path as a fresh trigger).
+///
+/// Scrolling is fully manual (`track_scroll` + wheel handler): gpui's native
+/// x-scroll maps the wheel's Y delta onto X but does not stop propagation, so
+/// the wheel would scroll the chips AND the popup body at once (the same
+/// TabBar pitfall documented in `docs/rendering.md`). The handle lives on
+/// `DictState` so the offset survives re-renders.
+fn related_words_row(
+    words: &[String],
+    state: Entity<DictState>,
+    handle: &gpui::ScrollHandle,
+) -> gpui::AnyElement {
+    let wheel_handle = handle.clone();
+
+    let chips: Vec<_> = words
+        .iter()
+        .enumerate()
+        .map(|(idx, word)| {
+            let word = word.clone();
+            let state = state.clone();
+            div()
+                .id(SharedString::from(format!("wl-related-{idx}")))
+                .flex_shrink_0()
+                .px(px(10.))
+                .py(px(4.))
+                .rounded(px(999.))
+                .bg(colors::hover())
+                .border_1()
+                .border_color(colors::border())
+                .text_size(px(11.))
+                .text_color(colors::text())
+                .cursor_pointer()
+                .hover(|s| s.bg(colors::border()))
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .max_w(px(160.))
+                .child(SharedString::from(word.clone()))
+                .on_click(move |_ev, _window, cx| {
+                    let job = state.update(cx, |s, _cx| {
+                        s.word_lookup_engine
+                            .as_mut()
+                            .map(|wl| wl.lookup_text(word.clone()))
+                    });
+                    if let Some(job) = job {
+                        spawn_lookup(job, state.clone(), cx);
+                    }
+                })
+        })
+        .collect();
+
+    let row = h_flex()
+        .id("wl-related-row")
+        .track_scroll(handle)
+        .overflow_hidden()
+        .gap(px(6.))
+        .w_full()
+        .min_w_0()
+        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_scroll_wheel(move |event, window, cx| {
+            // Fits without scrolling — let the popup body handle the wheel.
+            if wheel_handle.max_offset().x <= px(0.) {
+                return;
+            }
+            let delta = event.delta.pixel_delta(window.line_height());
+            let mut offset = wheel_handle.offset();
+            // Wheel down / right moves the row leftward (offset more
+            // negative), matching gpui's own scroll convention.
+            offset.x -= delta.x + delta.y;
+            wheel_handle.set_offset(offset);
+            // Don't let the popup body scroll from the same gesture.
+            cx.stop_propagation();
+        })
+        .children(chips);
+
+    // The library scrollbar, confined to a thin strip under the chips so its
+    // full-area click-to-jump overlay can't swallow chip clicks.
+    let scrollbar_strip = div().relative().h(px(12.)).w_full().child(
+        div().absolute().inset_0().child(
+            gpui_component::scroll::Scrollbar::new(handle)
+                .axis(gpui_component::scroll::ScrollbarAxis::Horizontal),
+        ),
+    );
+
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .gap(px(2.))
+        .child(row)
+        .child(scrollbar_strip)
         .into_any_element()
 }
 

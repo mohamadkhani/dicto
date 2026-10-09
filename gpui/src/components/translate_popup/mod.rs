@@ -172,13 +172,17 @@ pub(crate) fn shape_fingerprint(state: &DictState) -> String {
                 word,
                 results,
                 active,
+                related,
             } => format!(
-                "wl-ready-{}-{}-{}",
+                "wl-ready-{}-{}-{}-{}",
                 word.chars().count(),
                 results.len(),
-                active
+                active,
+                related.len()
             ),
-            PopupState::LookupNotFound { word } => format!("wl-notfound-{}", word.chars().count()),
+            PopupState::LookupNotFound { word, related } => {
+                format!("wl-notfound-{}-{}", word.chars().count(), related.len())
+            }
             PopupState::LookupDisabled => "wl-disabled".into(),
             PopupState::LookupError { .. } => "wl-error".into(),
         };
@@ -190,17 +194,19 @@ pub(crate) fn shape_fingerprint(state: &DictState) -> String {
                 word,
                 results,
                 active,
+                related,
             }) => format!(
-                "wl-ready-{}-{}-{}",
+                "wl-ready-{}-{}-{}-{}",
                 word.chars().count(),
                 results.len(),
-                active
+                active,
+                related.len()
             ),
             crate::word_lookup::LookupStatus::Visible(LookupState::Loading { word }) => {
                 format!("wl-loading-{}", word.chars().count())
             }
-            crate::word_lookup::LookupStatus::Visible(LookupState::NotFound { word }) => {
-                format!("wl-notfound-{}", word.chars().count())
+            crate::word_lookup::LookupStatus::Visible(LookupState::NotFound { word, related }) => {
+                format!("wl-notfound-{}-{}", word.chars().count(), related.len())
             }
             crate::word_lookup::LookupStatus::Visible(LookupState::Disabled) => {
                 "wl-disabled".into()
@@ -232,6 +238,7 @@ pub(crate) fn estimated_window_height(state: Option<&PopupState>) -> f32 {
     const WORD: f32 = 30.; // word header row (20px text + 26px buttons, 2px slack)
     const TABS: f32 = 30.; // dictionary tab strip
     const DEFINITION: f32 = 240.; // definition body (grows to MAX via probes)
+    const CHIPS: f32 = 26.; // related-words chips row (single horizontal line)
     const LOOKUP_FOOTER: f32 = 48.; // action row (buttons + 8px paddings + border)
 
     let original_section = HEADER + GAP + ORIGINAL + GAP + DIVIDER;
@@ -259,11 +266,17 @@ pub(crate) fn estimated_window_height(state: Option<&PopupState>) -> f32 {
         // Word Lookup states: word header + (tabs + definition | spinner |
         // not-found note). Their footer is the action row (LOOKUP_FOOTER).
         Some(PS::LookupLoading { .. }) => (WORD + GAP + SPINNER, None),
-        Some(PS::LookupReady { results, .. }) => {
+        Some(PS::LookupReady {
+            results, related, ..
+        }) => {
             let tabs = if results.len() > 1 { TABS + GAP } else { 0. };
-            (WORD + GAP + tabs + DEFINITION, None)
+            let chips = if related.is_empty() { 0. } else { GAP + CHIPS };
+            (WORD + GAP + tabs + chips + DEFINITION, None)
         }
-        Some(PS::LookupNotFound { .. }) => (WORD + GAP + BANNER + GAP + ROW, None),
+        Some(PS::LookupNotFound { related, .. }) => {
+            let chips = if related.is_empty() { 0. } else { GAP + CHIPS };
+            (WORD + GAP + BANNER + GAP + chips + ROW, None)
+        }
         // Hint states: a note + (for Disabled) an Enable button, no footer.
         Some(PS::LookupDisabled) => (WORD + GAP + BANNER + GAP + ROW, None),
         Some(PS::LookupError { .. }) => (BANNER, None),
@@ -301,9 +314,16 @@ pub enum PopupState {
         word: String,
         results: Vec<crate::state::DictResult>,
         active: usize,
+        /// Fuzzy near-matches for the horizontal chips row.
+        related: Vec<String>,
     },
-    /// Word Lookup: no dictionary had a hit — offer "Translate".
-    LookupNotFound { word: String },
+    /// Word Lookup: no dictionary had a hit — offer "Translate" plus the
+    /// near-miss chips.
+    LookupNotFound {
+        word: String,
+        /// Fuzzy near-matches for the horizontal chips row.
+        related: Vec<String>,
+    },
     /// Word Lookup: the feature is off — offer a one-click Enable.
     LookupDisabled,
     /// Word Lookup: the selection could not be read.
@@ -321,7 +341,7 @@ impl PopupState {
             | PopupState::TooLong { original } => original,
             PopupState::LookupLoading { word }
             | PopupState::LookupReady { word, .. }
-            | PopupState::LookupNotFound { word } => word,
+            | PopupState::LookupNotFound { word, .. } => word,
             PopupState::LookupDisabled | PopupState::LookupError { .. } => "",
         }
     }
@@ -373,14 +393,17 @@ fn lookup_state_of(ps: &PopupState) -> crate::word_lookup::LookupState {
             word,
             results,
             active,
+            related,
         } => crate::word_lookup::LookupState::Ready {
             word: word.clone(),
             results: results.clone(),
             active: *active,
+            related: related.clone(),
         },
-        PopupState::LookupNotFound { word } => {
-            crate::word_lookup::LookupState::NotFound { word: word.clone() }
-        }
+        PopupState::LookupNotFound { word, related } => crate::word_lookup::LookupState::NotFound {
+            word: word.clone(),
+            related: related.clone(),
+        },
         PopupState::LookupDisabled => crate::word_lookup::LookupState::Disabled,
         PopupState::LookupError { message } => crate::word_lookup::LookupState::Error {
             message: message.clone(),
@@ -418,6 +441,9 @@ pub struct PopupProps {
     pub translation_editor: Entity<EditorState>,
     pub playback_source: sections::PlaybackSnapshot,
     pub playback_translation: sections::PlaybackSnapshot,
+    /// Scroll handle of the lookup popup's related-words chips row (lives on
+    /// `DictState` so the offset survives re-renders).
+    pub wl_related_scroll: gpui::ScrollHandle,
     /// Records the layout's natural heights so the view can resize the
     /// window to its content (see [`MeasureProbes`]).
     pub measure: MeasureProbes,
@@ -467,6 +493,7 @@ pub fn translate_popup(state_entity: &Entity<DictState>, props: PopupProps) -> g
         translation_editor,
         playback_source,
         playback_translation,
+        wl_related_scroll,
         measure,
         on_toggle_options,
         on_close,
@@ -665,6 +692,7 @@ pub fn translate_popup(state_entity: &Entity<DictState>, props: PopupProps) -> g
             &lookup_state_of(state),
             &tts,
             playback_source.clone(),
+            &wl_related_scroll,
         ),
     };
 
@@ -692,17 +720,21 @@ pub fn translate_popup(state_entity: &Entity<DictState>, props: PopupProps) -> g
     let body_scroll = v_flex()
         .id("qt-popup-body")
         .h_full()
+        // Horizontal padding lives INSIDE the scroll wrapper, not on the
+        // outer body: `overflow_y_scrollbar` paints its thumb at the
+        // wrapper's right edge, so a full-width wrapper puts the scrollbar
+        // in the card's gutter instead of on top of the content.
+        .px(px(14.))
         .overflow_y_scrollbar()
         .child(probe(measure.body_top.clone()))
         .child(inner)
         .child(probe(measure.body_end.clone()));
-    // The body carries the frame's horizontal padding now that the title
-    // strip (full-bleed) and the footer (full-bleed) own the top and bottom
-    // edges. 12px bottom padding mirrors the design's py-3.
+    // The scroll area spans the full card width; top/bottom padding stays on
+    // the outer body (vertical padding doesn't affect the thumb). 12px
+    // bottom padding mirrors the design's py-3.
     let body = v_flex()
         .flex_1()
         .min_h(px(0.))
-        .px(px(14.))
         .pt(px(12.))
         .pb(px(12.))
         .child(body_scroll);
@@ -1089,14 +1121,20 @@ impl Render for TranslatePopupView {
                         word,
                         results,
                         active,
+                        related,
                     }) => PopupState::LookupReady {
                         word: word.clone(),
                         results: results.clone(),
                         active: *active,
+                        related: related.clone(),
                     },
-                    crate::word_lookup::LookupStatus::Visible(LookupState::NotFound { word }) => {
-                        PopupState::LookupNotFound { word: word.clone() }
-                    }
+                    crate::word_lookup::LookupStatus::Visible(LookupState::NotFound {
+                        word,
+                        related,
+                    }) => PopupState::LookupNotFound {
+                        word: word.clone(),
+                        related: related.clone(),
+                    },
                     crate::word_lookup::LookupStatus::Visible(LookupState::Disabled) => {
                         PopupState::LookupDisabled
                     }
@@ -1194,6 +1232,7 @@ impl Render for TranslatePopupView {
                     translation_editor: self.translation_editor.clone(),
                     playback_source: pb_src,
                     playback_translation: pb_tr,
+                    wl_related_scroll: self.state.read(cx).wl_related_scroll.clone(),
                     measure: self.measure.clone(),
                     options_settled: self.options_settled(window),
                     on_toggle_options: Box::new(

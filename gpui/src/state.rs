@@ -116,6 +116,11 @@ pub struct DictState {
     /// window with the translate engine — only one is visible at a time.
     pub word_lookup_engine: Option<WordLookupEngine>,
 
+    /// Scroll handle for the lookup popup's horizontal related-words row.
+    /// Lives on the state so the scroll offset survives re-renders and the
+    /// wheel handler can drive it (see `related_words_row`).
+    pub wl_related_scroll: gpui::ScrollHandle,
+
     /// TTS playback controllers — one per Speak slot so the source and the
     /// translation can play independently without their controls/state mixing.
     /// Each owns its rodio stream + sink so clips can be paused/seeked/replayed
@@ -261,6 +266,7 @@ impl DictState {
             auto_shortcuts,
             quick_translate_engine: engine,
             word_lookup_engine,
+            wl_related_scroll: gpui::ScrollHandle::new(),
             qt_api_key_input: None,
             qt_base_url_input: None,
             qt_model_input: None,

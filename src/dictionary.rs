@@ -54,6 +54,11 @@ pub trait Dictionary: Send + Sync {
     /// Prefix search. Returns up to `limit` matching headwords.
     fn suggestions(&self, prefix: &str, limit: usize) -> Vec<String>;
 
+    /// Fuzzy near-matches: headwords within a small edit distance of
+    /// `word`, excluding the word itself. Backs the "related words"
+    /// suggestions shown when a lookup misses (or between near forms).
+    fn related_words(&self, word: &str, limit: usize) -> Vec<String>;
+
     /// Fetch a binary resource (image, audio, font) by virtual path.
     /// Returns `None` if this dictionary has no such resource.
     fn resource(&self, path: &str) -> Option<Vec<u8>>;

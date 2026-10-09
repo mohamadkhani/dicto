@@ -37,9 +37,16 @@ pub enum LookupState {
         word: String,
         results: Vec<DictResult>,
         active: usize,
+        /// Fuzzy near-matches shown as horizontally scrollable chips.
+        related: Vec<String>,
     },
-    /// No dictionary had a hit — the popup offers "Translate with AI".
-    NotFound { word: String },
+    /// No dictionary had a hit — the popup offers "Translate with AI"
+    /// plus the near-miss suggestions.
+    NotFound {
+        word: String,
+        /// Fuzzy near-matches shown as horizontally scrollable chips.
+        related: Vec<String>,
+    },
     /// The feature is turned off — the popup offers a one-click Enable.
     Disabled,
     /// The selection could not be read (same hint as the translate popup).
@@ -52,7 +59,7 @@ impl LookupState {
         match self {
             LookupState::Loading { word }
             | LookupState::Ready { word, .. }
-            | LookupState::NotFound { word } => Some(word),
+            | LookupState::NotFound { word, .. } => Some(word),
             LookupState::Disabled | LookupState::Error { .. } => None,
         }
     }
@@ -198,16 +205,21 @@ impl WordLookupEngine {
     /// `Loading` to `Ready` or `NotFound`. Called on the main thread once
     /// the background executor finishes.
     pub fn apply_result(&mut self, outcome: LookupOutcome) {
-        let LookupOutcome { word, results } = outcome;
+        let LookupOutcome {
+            word,
+            results,
+            related,
+        } = outcome;
         if results.is_empty() {
             info!(word = %word, "word lookup: no dictionary hits");
-            self.status = LookupStatus::Visible(LookupState::NotFound { word });
+            self.status = LookupStatus::Visible(LookupState::NotFound { word, related });
         } else {
             info!(word = %word, dicts = results.len(), "word lookup: completed");
             self.status = LookupStatus::Visible(LookupState::Ready {
                 word,
                 active: 0,
                 results,
+                related,
             });
         }
     }
@@ -282,18 +294,27 @@ impl LookupJob {
                 }
             })
             .collect();
+        // Fuzzy near-matches for the horizontal chips row — useful both on
+        // a miss ("did you mean") and to hop between word forms.
+        let related = mdict_rs::query::related_words(&self.word, RELATED_LIMIT);
         LookupOutcome {
             word: self.word,
             results,
+            related,
         }
     }
 }
 
+/// How many fuzzy near-match chips the popup offers.
+pub const RELATED_LIMIT: usize = 14;
+
 /// The completed lookup: the word plus one parsed entry per dictionary
-/// that had a hit (empty = not found).
+/// that had a hit (empty = not found), and the fuzzy near-matches for the
+/// selectable chips row.
 pub struct LookupOutcome {
     pub word: String,
     pub results: Vec<DictResult>,
+    pub related: Vec<String>,
 }
 
 /// Clean up a selection so it hits the dictionary FST: trim whitespace and
