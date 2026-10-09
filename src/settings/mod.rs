@@ -15,7 +15,7 @@ use tracing::{info, warn};
 
 use crate::config::{APP_NAME, discover_mdx_files};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
     pub dictionaries: Vec<DictEntry>,
@@ -27,6 +27,50 @@ pub struct Settings {
     /// Local-only; identifies an installation, never a person.
     #[serde(default)]
     pub installation_id: Option<String>,
+    /// Quick Translate feature: global hotkey + LLM translation settings.
+    /// Stored in the core crate as plain data so the GPUI app and
+    /// `dicto-translate` crate both have access without circular deps.
+    #[serde(default)]
+    pub quick_translate: QuickTranslateSettings,
+    /// Word Lookup feature: global hotkey + local dictionary popup settings.
+    /// Same plain-data placement as `quick_translate`.
+    #[serde(default)]
+    pub word_lookup: WordLookupSettings,
+    /// Automatically define the OS-level shortcuts for the quick actions
+    /// (XDG GlobalShortcuts portal, or GNOME custom keybindings when the
+    /// portal is unavailable). Default on — the user should not have to
+    /// create shortcuts by hand.
+    #[serde(default = "default_auto_shortcuts")]
+    pub auto_shortcuts: bool,
+    /// User dismissed the "install Window Calls" hint (GNOME Wayland popup
+    /// placement). Persisted so it is shown at most once per decision.
+    #[serde(default)]
+    pub window_calls_hint_dismissed: bool,
+    /// User dismissed the "configure Quick Translate AI" hint banner.
+    /// Persisted so it is shown at most once per decision.
+    #[serde(default)]
+    pub ai_setup_hint_dismissed: bool,
+}
+
+impl Default for Settings {
+    /// Manual impl because `auto_shortcuts` defaults to ON — the derived
+    /// `Default` would give `false` for the bool.
+    fn default() -> Self {
+        Self {
+            dictionaries: Vec::new(),
+            telemetry_consent: TelemetryConsent::default(),
+            installation_id: None,
+            quick_translate: QuickTranslateSettings::default(),
+            word_lookup: WordLookupSettings::default(),
+            auto_shortcuts: default_auto_shortcuts(),
+            window_calls_hint_dismissed: false,
+            ai_setup_hint_dismissed: false,
+        }
+    }
+}
+
+fn default_auto_shortcuts() -> bool {
+    true
 }
 
 /// Three-state telemetry consent, persisted in settings.toml.
@@ -40,6 +84,164 @@ pub enum TelemetryConsent {
     OptedIn,
     /// User declined → nothing is sent, ever, until they re-enable.
     OptedOut,
+}
+
+/// Quick Translate feature settings.
+///
+/// Controls the global hotkey, LLM provider configuration, and target
+/// language for the selection-translation popup. Stored here in the core
+/// crate as plain data so both the GPUI UI and the `dicto-translate`
+/// crate can use them without circular dependencies.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuickTranslateSettings {
+    /// Whether the quick-translate feature is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Hotkey string in "Mod+Mod+Key" format, e.g. "Ctrl+Alt+D".
+    #[serde(default = "default_hotkey")]
+    pub hotkey: String,
+    /// Which LLM provider to use. Always `OpenAiCompatible` — the variant
+    /// exists for old-settings parse compatibility only.
+    #[serde(default)]
+    pub llm_provider: LlmProvider,
+    /// API key for the configured LLM provider.
+    /// Stored in plaintext; future work may move to OS keyring.
+    #[serde(default)]
+    pub api_key: String,
+    /// Base URL for the API, e.g. "https://api.openai.com/v1". Required.
+    #[serde(default)]
+    pub api_base_url: String,
+    /// Model name, e.g. "claude-sonnet-4-6" or "gpt-4o-mini".
+    #[serde(default = "default_model")]
+    pub model: String,
+    /// Target language for translation, e.g. "English", "Persian".
+    #[serde(default = "default_target_lang")]
+    pub target_lang: String,
+    /// Text-to-speech settings for the popup's Speak button.
+    #[serde(default)]
+    pub tts: TtsSettings,
+}
+
+impl Default for QuickTranslateSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            hotkey: default_hotkey(),
+            llm_provider: LlmProvider::default(),
+            api_key: String::new(),
+            api_base_url: String::new(),
+            model: default_model(),
+            target_lang: default_target_lang(),
+            tts: TtsSettings::default(),
+        }
+    }
+}
+
+/// Word Lookup feature settings.
+///
+/// Controls the global hotkey (and enable flag) for the quick dictionary
+/// lookup popup: select a word anywhere, press the hotkey, and a small
+/// popup shows the local-dictionary definition. Lookups always run against
+/// the local MDict dictionaries — no network, no API key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WordLookupSettings {
+    /// Whether the word-lookup feature is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Hotkey string in "Mod+Mod+Key" format, e.g. "Ctrl+Alt+W".
+    #[serde(default = "default_lookup_hotkey")]
+    pub hotkey: String,
+}
+
+impl Default for WordLookupSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            hotkey: default_lookup_hotkey(),
+        }
+    }
+}
+
+fn default_lookup_hotkey() -> String {
+    "Ctrl+Alt+W".to_string()
+}
+
+/// Text-to-speech settings.
+///
+/// When `enabled`, the popup's Speak button synthesizes speech via an
+/// OpenAI-compatible `/audio/speech` endpoint (OpenAI, Groq, OpenRouter,
+/// local servers). When disabled, it falls back to the platform TTS
+/// (espeak-ng on Linux).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TtsSettings {
+    /// Use the AI TTS API instead of the platform TTS.
+    #[serde(default)]
+    pub enabled: bool,
+    /// API key for the TTS provider.
+    #[serde(default)]
+    pub api_key: String,
+    /// Base URL, e.g. "https://api.openai.com/v1".
+    #[serde(default = "default_tts_base_url")]
+    pub api_base_url: String,
+    /// TTS model, e.g. "gpt-4o-mini-tts" or "tts-1".
+    #[serde(default = "default_tts_model")]
+    pub model: String,
+    /// Voice name, e.g. "alloy", "nova", "shimmer".
+    #[serde(default = "default_tts_voice")]
+    pub voice: String,
+}
+
+impl Default for TtsSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_key: String::new(),
+            api_base_url: default_tts_base_url(),
+            model: default_tts_model(),
+            voice: default_tts_voice(),
+        }
+    }
+}
+
+fn default_tts_base_url() -> String {
+    "https://api.openai.com/v1".to_string()
+}
+
+fn default_tts_model() -> String {
+    "gpt-4o-mini-tts".to_string()
+}
+
+fn default_tts_voice() -> String {
+    "alloy".to_string()
+}
+
+fn default_hotkey() -> String {
+    "Ctrl+Alt+D".to_string()
+}
+
+fn default_model() -> String {
+    "gpt-4o-mini".to_string()
+}
+
+fn default_target_lang() -> String {
+    "English".to_string()
+}
+
+/// LLM provider for AI-powered translation.
+///
+/// Only OpenAI-compatible endpoints are supported. The `Anthropic` variant
+/// is kept solely so settings.toml files written by older versions still
+/// parse; on load it is coerced to [`LlmProvider::OpenAiCompatible`] (see
+/// `load_from_disk`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LlmProvider {
+    /// Kept for old-settings parse compatibility; coerced on load.
+    Anthropic,
+    /// Any OpenAI-compatible endpoint (OpenAI, OpenRouter, Groq, z.ai,
+    /// Ollama, llama.cpp, vLLM…).
+    #[default]
+    OpenAiCompatible,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,7 +270,10 @@ fn load_from_disk() -> Settings {
     }
     match fs::read_to_string(&path) {
         Ok(s) => match toml::from_str(&s) {
-            Ok(parsed) => parsed,
+            Ok(mut parsed) => {
+                migrate(&mut parsed);
+                parsed
+            }
             Err(e) => {
                 warn!("settings: parse failed ({e}); using defaults");
                 Settings::default()
@@ -77,6 +282,20 @@ fn load_from_disk() -> Settings {
         Err(e) => {
             warn!("settings: read failed ({e}); using defaults");
             Settings::default()
+        }
+    }
+}
+
+/// One-time migrations for settings written by older versions. Currently:
+/// coerce the removed Anthropic provider to OpenAI-compatible, and give it
+/// the OpenAI base URL when the file has none (Anthropic used a different
+/// endpoint, so the old base URL — if any — would be wrong anyway).
+fn migrate(s: &mut Settings) {
+    let qt = &mut s.quick_translate;
+    if qt.llm_provider == LlmProvider::Anthropic {
+        qt.llm_provider = LlmProvider::OpenAiCompatible;
+        if qt.api_base_url.is_empty() {
+            qt.api_base_url = "https://api.openai.com/v1".to_string();
         }
     }
 }
@@ -138,6 +357,32 @@ pub fn update_consent(consent: TelemetryConsent) -> anyhow::Result<Settings> {
     Ok(current)
 }
 
+/// Persist the "install Window Calls" hint dismissal, preserving every
+/// other field (same pattern as [`update_consent`]).
+pub fn set_window_calls_hint_dismissed(dismissed: bool) -> anyhow::Result<()> {
+    let mut current = current();
+    if current.window_calls_hint_dismissed == dismissed {
+        return Ok(());
+    }
+    current.window_calls_hint_dismissed = dismissed;
+    save(&current)?;
+    *SETTINGS.write().unwrap() = current;
+    Ok(())
+}
+
+/// Persist the "configure Quick Translate AI" hint dismissal, preserving
+/// every other field (same pattern as [`update_consent`]).
+pub fn set_ai_setup_hint_dismissed(dismissed: bool) -> anyhow::Result<()> {
+    let mut current = current();
+    if current.ai_setup_hint_dismissed == dismissed {
+        return Ok(());
+    }
+    current.ai_setup_hint_dismissed = dismissed;
+    save(&current)?;
+    *SETTINGS.write().unwrap() = current;
+    Ok(())
+}
+
 /// Generate + persist the installation id if none exists yet. Returns the id
 /// (newly generated or existing). Cheap to call every launch — it's a no-op
 /// once an id is present.
@@ -186,7 +431,8 @@ fn format_uuid_v4() -> String {
     )
 }
 
-fn save(s: &Settings) -> anyhow::Result<()> {
+/// Persist settings to disk.
+pub fn save(s: &Settings) -> anyhow::Result<()> {
     let path = settings_path();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;

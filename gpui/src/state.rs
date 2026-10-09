@@ -1,15 +1,21 @@
 use std::path::PathBuf;
 
-use mdict_rs::settings::DictEntry;
+use mdict_rs::settings::{DictEntry, QuickTranslateSettings, WordLookupSettings};
 
 use crate::catalog::DictCatalogEntry;
 use crate::html::Block;
+use crate::quick_translate::QuickTranslateEngine;
+use crate::word_lookup::WordLookupEngine;
 
 #[derive(Debug, Clone)]
 pub struct DictResult {
     /// Short name for tab labels.
     pub short_name: String,
     pub blocks: Vec<Block>,
+    /// The dictionary's bundled pronunciation clip for the headword
+    /// (first `sound://` resource in the entry), if any. The quick
+    /// lookup popup plays this before falling back to TTS.
+    pub audio: Option<String>,
 }
 
 pub struct ImportFile {
@@ -85,11 +91,157 @@ pub struct DictState {
     pub download_status: DictDownloadStatus,
     pub download_active_id: Option<String>,
     pub import_modal_tab: usize,
+
+    /// Quick Translate settings snapshot (loaded from disk, editable in UI).
+    pub quick_translate: QuickTranslateSettings,
+
+    /// Word Lookup settings snapshot (loaded from disk, editable in UI).
+    pub word_lookup: WordLookupSettings,
+
+    /// Hotkey backend identifier — "x11", "xdg-portal", "tray_menu", or
+    /// "none".
+    pub hotkey_backend: String,
+
+    /// Whether the app should define the OS-level shortcuts automatically
+    /// (portal / GNOME custom keybindings). Mirrors `Settings::auto_shortcuts`.
+    pub auto_shortcuts: bool,
+
+    /// Quick Translate engine (hotkey + translator + popup state).
+    ///
+    /// Stored as an option so we can lazily initialize or replace it
+    /// when settings change.
+    pub quick_translate_engine: Option<QuickTranslateEngine>,
+
+    /// Word Lookup engine (lookup hotkey + popup state). Shares the popup
+    /// window with the translate engine — only one is visible at a time.
+    pub word_lookup_engine: Option<WordLookupEngine>,
+
+    /// Scroll handle for the lookup popup's horizontal related-words row.
+    /// Lives on the state so the scroll offset survives re-renders and the
+    /// wheel handler can drive it (see `related_words_row`).
+    pub wl_related_scroll: gpui::ScrollHandle,
+
+    /// TTS playback controllers — one per Speak slot so the source and the
+    /// translation can play independently without their controls/state mixing.
+    /// Each owns its rodio stream + sink so clips can be paused/seeked/replayed
+    /// without re-synthesizing. State is observable via `snapshot()`; the popup
+    /// polls `poll_progress()` on a timer to drive each seek bar.
+    pub playback_source: crate::playback::PlaybackController,
+    pub playback_translation: crate::playback::PlaybackController,
+
+    /// Editable text-input states for the Quick Translate settings fields.
+    /// Lazily created on first render of the settings tab and persisted so
+    /// focus/cursor survives re-renders. `None` until the tab is first shown.
+    pub qt_api_key_input: Option<gpui::Entity<gpui_component::input::InputState>>,
+    pub qt_base_url_input: Option<gpui::Entity<gpui_component::input::InputState>>,
+    pub qt_model_input: Option<gpui::Entity<gpui_component::input::InputState>>,
+    pub qt_target_lang_input: Option<gpui::Entity<gpui_component::input::InputState>>,
+    /// Adaptive model picker (chips/dropdown) for the settings tab — the
+    /// same `OptionPicker` the popup's Options panel uses. Lazily created
+    /// on first render, then reconciled from the live settings.
+    pub qt_model_picker: Option<gpui::Entity<crate::components::option_picker::OptionPicker>>,
+    /// Adaptive target-language picker for the settings tab (same pattern
+    /// as `qt_model_picker`).
+    pub qt_target_lang_picker: Option<gpui::Entity<crate::components::option_picker::OptionPicker>>,
+    /// Adaptive TTS model picker for the settings tab (same pattern as
+    /// `qt_model_picker`).
+    pub qt_tts_model_picker: Option<gpui::Entity<crate::components::option_picker::OptionPicker>>,
+    /// Adaptive TTS voice picker — shown when the selected model publishes
+    /// its voices; otherwise the free-text voice input is used instead.
+    pub qt_tts_voice_picker: Option<gpui::Entity<crate::components::option_picker::OptionPicker>>,
+    /// TTS settings input fields (lazily created, same pattern as above).
+    pub qt_tts_api_key_input: Option<gpui::Entity<gpui_component::input::InputState>>,
+    pub qt_tts_base_url_input: Option<gpui::Entity<gpui_component::input::InputState>>,
+    /// True once we've seeded the input states from loaded settings, so we
+    /// don't clobber the user's in-progress edits on every re-render.
+    pub qt_inputs_seeded: bool,
+
+    /// Handle to the currently-open Quick Translate popup window, if any.
+    /// Kept so we can close it before opening a new one on a fresh trigger.
+    /// The popup's root view is a `gpui_component::Root` wrapping the
+    /// `TranslatePopupView` — the Original text editor (`Input`) requires a
+    /// `Root` at the window root (it registers itself as the focused input).
+    pub qt_popup_window: Option<gpui::WindowHandle<gpui_component::Root>>,
+    /// Set while a tokenless re-trigger is replacing the popup window: the
+    /// window-closed observer must NOT hide the popup engine for this
+    /// programmatic close (the poll loop reopens the window next tick).
+    pub qt_replace_pending: bool,
+    /// Last user-chosen Quick Translate popup position (window origin),
+    /// recorded by the popup's bounds observer while the user drags it.
+    /// The next popup opens here instead of screen-center. X11 only in
+    /// practice: Wayland compositors never report window moves, so there
+    /// the restore goes through `window_move` and the GNOME Shell
+    /// extension instead. Session-scoped: `None` until the user moves the
+    /// popup once.
+    pub qt_popup_pos: Option<gpui::Point<gpui::Pixels>>,
+
+    /// GNOME window-calls extension probe (popup placement on Wayland).
+    /// `None` while the startup probe is still running; `Some(true)` means
+    /// the extension is missing/disabled and the hint banner should show.
+    pub window_calls_missing: Option<bool>,
+    /// User dismissed the window-calls hint (persisted in settings.toml).
+    pub window_calls_hint_dismissed: bool,
+
+    /// User dismissed the "configure Quick Translate AI" hint banner
+    /// (persisted in settings.toml).
+    pub ai_setup_hint_dismissed: bool,
+
+    /// Live result of the [Test] button next to the translation API key
+    /// field in the settings tab.
+    pub qt_translation_test: QtKeyTest,
+    /// Live result of the [Test] button next to the TTS API key field in
+    /// the settings tab.
+    pub qt_tts_test: QtKeyTest,
+    /// Live result of the "Load models" button next to the Model picker
+    /// (OpenAI-compatible provider only).
+    pub qt_models_load: QtKeyTest,
+    /// Live result of the "Load models" button under the TTS Model picker.
+    pub qt_tts_models_load: QtKeyTest,
+    /// Model ids fetched from the OpenAI-compatible /models endpoint.
+    /// Empty = never loaded → the model picker falls back to the hardcoded
+    /// catalog.
+    pub qt_openai_models: Vec<String>,
+    /// TTS-capable models fetched from /models (TTS-filtered), with the
+    /// voices each model publishes. Empty = never loaded → the TTS model
+    /// picker falls back to the hardcoded list.
+    pub qt_tts_models: Vec<dicto_translate::openai::TtsModel>,
+    /// Set once per app run after the automatic models/voices load (the
+    /// popup triggers it on open) — prevents repeated background fetches.
+    pub qt_models_autoloaded: bool,
+}
+
+/// Outcome of a settings-tab key test. `Ok`/`Err` carry a short,
+/// display-ready message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QtKeyTest {
+    Idle,
+    Running,
+    Ok(String),
+    Err(String),
 }
 
 impl DictState {
     pub fn new() -> Self {
-        Self {
+        let settings = mdict_rs::settings::current();
+        let qt_settings = settings.quick_translate.clone();
+        let wl_settings = settings.word_lookup.clone();
+        let engine = if qt_settings.enabled {
+            Some(QuickTranslateEngine::new(qt_settings.clone()))
+        } else {
+            None
+        };
+        // The word-lookup engine ALWAYS exists (unlike the translate
+        // engine): triggers via IPC / tray must be able to show the
+        // "enable me" popup instead of failing silently. Only its hotkey
+        // registration is gated on `enabled`.
+        let word_lookup_engine = Some(WordLookupEngine::new(wl_settings.clone()));
+        let backend = engine
+            .as_ref()
+            .map(|e| e.backend_name().to_string())
+            .unwrap_or_else(|| "none".to_string());
+        let auto_shortcuts = settings.auto_shortcuts;
+
+        let state = Self {
             word_list_scroll: gpui::ScrollHandle::new(),
             results: Vec::new(),
             active_result: 0,
@@ -97,7 +249,7 @@ impl DictState {
             is_searching: false,
             suggestions: Vec::new(),
             selected_suggestion: None,
-            dictionaries: mdict_rs::settings::current().dictionaries,
+            dictionaries: settings.dictionaries,
             indexing_total: 0,
             indexing_done: 0,
             indexing_current: None,
@@ -108,6 +260,157 @@ impl DictState {
             download_status: DictDownloadStatus::Idle,
             download_active_id: None,
             import_modal_tab: 0,
+            quick_translate: qt_settings,
+            word_lookup: wl_settings,
+            hotkey_backend: backend,
+            auto_shortcuts,
+            quick_translate_engine: engine,
+            word_lookup_engine,
+            wl_related_scroll: gpui::ScrollHandle::new(),
+            qt_api_key_input: None,
+            qt_base_url_input: None,
+            qt_model_input: None,
+            qt_model_picker: None,
+            qt_target_lang_input: None,
+            qt_target_lang_picker: None,
+            qt_tts_model_picker: None,
+            qt_tts_voice_picker: None,
+            qt_tts_api_key_input: None,
+            qt_tts_base_url_input: None,
+            qt_inputs_seeded: false,
+            qt_popup_window: None,
+            qt_replace_pending: false,
+            qt_popup_pos: None,
+            window_calls_missing: if crate::window_move::placement_hint_relevant() {
+                None
+            } else {
+                Some(false)
+            },
+            window_calls_hint_dismissed: settings.window_calls_hint_dismissed,
+            ai_setup_hint_dismissed: settings.ai_setup_hint_dismissed,
+            qt_translation_test: QtKeyTest::Idle,
+            qt_tts_test: QtKeyTest::Idle,
+            qt_models_load: QtKeyTest::Idle,
+            qt_tts_models_load: QtKeyTest::Idle,
+            qt_openai_models: Vec::new(),
+            qt_tts_models: Vec::new(),
+            qt_models_autoloaded: false,
+            playback_source: crate::playback::PlaybackController::default(),
+            playback_translation: crate::playback::PlaybackController::default(),
+        };
+
+        // Reconcile the OS-level shortcut state with the settings on
+        // startup — the "auto keyboard shortcut definition" entry point.
+        state.sync_os_bindings();
+        state
+    }
+
+    /// Backend of whichever engine currently holds a hotkey manager — the
+    /// effective trigger layer (Quick Translate's manager when present, else
+    /// Word Lookup's).
+    fn effective_hotkey_backend(&self) -> String {
+        self.quick_translate_engine
+            .as_ref()
+            .map(|e| e.backend_name().to_string())
+            .or_else(|| {
+                self.word_lookup_engine
+                    .as_ref()
+                    .map(|e| e.backend_name().to_string())
+            })
+            .unwrap_or_else(|| "none".to_string())
+    }
+
+    /// Fire-and-forget reconciliation of the OS shortcut state (GNOME
+    /// custom keybindings etc.) with the current settings. Cheap to call
+    /// repeatedly — the work runs on a background thread and converges.
+    pub fn sync_os_bindings(&self) {
+        #[cfg(target_os = "linux")]
+        crate::hotkey::os_binding::sync(
+            &self.quick_translate,
+            &self.word_lookup,
+            self.auto_shortcuts,
+            &self.effective_hotkey_backend(),
+        );
+        #[cfg(not(target_os = "linux"))]
+        let _ = self.effective_hotkey_backend();
+    }
+
+    /// Whether the Quick Translate AI provider is fully configured:
+    /// API key and base URL present. The setup hint banner shows while
+    /// this is false.
+    pub fn translation_ready(&self) -> bool {
+        let qt = &self.quick_translate;
+        !qt.api_key.is_empty() && !qt.api_base_url.is_empty()
+    }
+
+    /// Reload the hotkey registrations after settings change.
+    pub fn reload_hotkey(&mut self, _cx: &mut gpui::App) {
+        let settings = self.quick_translate.clone();
+
+        if let Some(engine) = self.quick_translate_engine.as_mut() {
+            engine.update_settings(settings);
+            self.hotkey_backend = engine.backend_name().to_string();
+        } else if settings.enabled {
+            let engine = QuickTranslateEngine::new(settings);
+            self.hotkey_backend = engine.backend_name().to_string();
+            self.quick_translate_engine = Some(engine);
         }
+
+        // Word Lookup engine always exists; update_settings handles the
+        // enable/hotkey lifecycle.
+        let wl_settings = self.word_lookup.clone();
+        if let Some(engine) = self.word_lookup_engine.as_mut() {
+            engine.update_settings(wl_settings);
+        } else {
+            self.word_lookup_engine = Some(WordLookupEngine::new(wl_settings));
+        }
+
+        // Keep the OS-level shortcuts in step with the new settings.
+        self.sync_os_bindings();
+    }
+
+    /// Reload the translator after settings change.
+    pub fn reload_translator(&mut self, _cx: &mut gpui::App) {
+        let settings = self.quick_translate.clone();
+
+        if let Some(engine) = self.quick_translate_engine.as_mut() {
+            engine.update_settings(settings);
+        } else if settings.enabled {
+            self.quick_translate_engine = Some(QuickTranslateEngine::new(settings));
+        }
+    }
+
+    /// Persist quick_translate settings to disk along with the full settings.
+    pub fn save_settings(&mut self, _cx: &mut gpui::App) {
+        let mut current = mdict_rs::settings::current();
+        current.dictionaries = self.dictionaries.clone();
+        current.quick_translate = self.quick_translate.clone();
+        current.word_lookup = self.word_lookup.clone();
+        current.auto_shortcuts = self.auto_shortcuts;
+        let _ = mdict_rs::settings::save(&current);
+    }
+
+    /// Stop any active TTS clip that no longer matches the popup's current
+    /// content: a different text (new selection / new translation) OR a
+    /// different TTS key (options changed). Ended/Loading clips are left
+    /// alone (their stale affordance is already shown by the popup).
+    ///
+    /// `text` / `tts_key` are compared independently — pass `None` to skip
+    /// a comparison. The two slots invalidate against the same inputs:
+    /// source matches the popup's original, translation matches its
+    /// translation. Callers reading the current text out of `popup_status`
+    /// pass it in directly; the popup passes the full tts key from
+    /// settings.
+    pub fn invalidate_tts_clips(&mut self, text: Option<&str>, tts_key: Option<&str>) {
+        self.playback_source.invalidate_on_change(text, tts_key);
+        self.playback_translation
+            .invalidate_on_change(text, tts_key);
+    }
+
+    /// Convenience: invalidate using the current `settings.tts` key (for
+    /// settings-driven invalidation from the Options panel).
+    pub fn invalidate_tts_clips_for_settings(&mut self, text: Option<&str>) {
+        let key = crate::playback::tts_key(&self.quick_translate.tts);
+        self.invalidate_tts_clips(text, Some(&key));
     }
 }

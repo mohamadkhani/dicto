@@ -1,5 +1,23 @@
 [workspace]
-members = [".", "gpui", "telemetry"]
+members = [".", "gpui", "telemetry", "translate"]
+resolver = "2"
+
+# Redirect every crate that asks for GPUI from upstream zed-industries/zed to
+# the mohamadkhani/zed fork — the same GPUI dependency source LogiGuard uses
+# (see Logicamp/logiguard). The fork carries the Wayland fixes Dicto needs:
+# 1. `Window::activate_with_token` for externally-minted xdg-activation
+#    tokens (tray clicks — see logiguard docs/tray-window-focus-wayland.md)
+# 2. xdg-activation keyboard-focus serial handling (wl_keyboard.enter serial
+#    on activation tokens — Mutter rejects stale mouse-press serials)
+# Without this section, gpui-component (which pins zed-industries/zed) would
+# pull a second, unpatched copy of gpui into the graph and the two sources
+# would not unify — breaking our call site. Pin to the same rev as
+# gpui/Cargo.toml.
+[patch."https://github.com/zed-industries/zed"]
+gpui = { git = "https://github.com/mohamadkhani/zed", rev = "c612da6503499b7242ce60e7aa893184d63043ec", version = "=0.2.2" }
+gpui_platform = { git = "https://github.com/mohamadkhani/zed", rev = "c612da6503499b7242ce60e7aa893184d63043ec", version = "=0.1.0" }
+gpui_macros = { git = "https://github.com/mohamadkhani/zed", rev = "c612da6503499b7242ce60e7aa893184d63043ec", version = "=0.1.0" }
+gpui_web = { git = "https://github.com/mohamadkhani/zed", rev = "c612da6503499b7242ce60e7aa893184d63043ec", version = "=0.1.0" }
 
 [package]
 name = "mdict-rs"

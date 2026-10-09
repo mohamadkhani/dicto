@@ -1,5 +1,6 @@
-use rand::{Rng, rng};
 use std::sync::LazyLock;
+
+use rand::{Rng, rng};
 
 pub fn lucky_word() -> String {
     WORDS[rng().random_range(0..WORDS.len())].to_string()

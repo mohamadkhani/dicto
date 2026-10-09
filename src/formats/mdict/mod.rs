@@ -10,13 +10,13 @@ use std::sync::{Arc, RwLock};
 use fst::automaton::{AlwaysMatch, Levenshtein, Str as FstStr};
 use fst::{Automaton, IntoStreamer, Map, MapBuilder, Streamer};
 use memmap2::Mmap;
-use tracing::{info, warn};
-
-use crate::dictionary::Dictionary;
 use parser::header::{header_stylesheet_to_css, parse_attrs};
 use parser::mdd::{Mdd, normalize_path};
 use parser::mdx::Mdx;
 use parser::recordblock::decompress_record_block;
+use tracing::{info, warn};
+
+use crate::dictionary::Dictionary;
 
 // ── offset record (24 bytes per entry) ───────────────────────────────────────
 
@@ -610,6 +610,39 @@ impl Dictionary for MdxDictionary {
             }
         }
 
+        results
+    }
+
+    fn related_words(&self, word: &str, limit: usize) -> Vec<String> {
+        // Same distance heuristic as the fuzzy supplement in `suggestions`:
+        // short words get distance 1 to avoid noise, longer ones 2. Keys in
+        // the index are lowercased, so the query must be too.
+        let p = word.to_lowercase();
+        if p.len() < 3 {
+            return vec![];
+        }
+        let dist = if p.len() < 6 { 1 } else { 2 };
+        let Some(idx) = self.open_fst() else {
+            return vec![];
+        };
+        let Ok(lev) = Levenshtein::new(&p, dist) else {
+            return vec![];
+        };
+
+        let mut results: Vec<String> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut stream = idx.map.search(&lev).into_stream();
+        while let Some((key, _)) = stream.next() {
+            if let Ok(s) = std::str::from_utf8(key)
+                && s != p
+                && seen.insert(s.to_string())
+            {
+                results.push(s.to_string());
+                if results.len() >= limit {
+                    break;
+                }
+            }
+        }
         results
     }
 

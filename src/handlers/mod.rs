@@ -1,8 +1,7 @@
 use axum::{extract::Form, response::Response};
-use serde::Deserialize;
-
 use mdict_rs::lucky;
 use mdict_rs::query::query;
+use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct SearchQuery {

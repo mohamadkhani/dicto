@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Dicto Quick Translate — Popup Design</title>
+  <!-- Import map: all components share ONE lit module instance. -->
+  <script type="importmap">
+    {
+      "imports": {
+        "lit": "https://esm.sh/lit@3.1.4",
+        "lit/": "https://esm.sh/lit@3.1.4/"
+      }
+    }
+  </script>
+  <!-- Tailwind v4 browser build. Components render to LIGHT DOM (no shadow
+       root), so these global styles apply to their content directly.
+       The theme tokens below MUST be inline: the browser build only compiles
+       <style type="text/tailwindcss"> blocks — it does not fetch <link>s.
+       (theme.css mirrors these tokens as documentation of the palette.) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.1.11/dist/index.global.js"></script>
+  <style type="text/tailwindcss">
+    @import "tailwindcss";
+    @theme {
+      --color-bg: #0f1117;
+      --color-surface: #1a1d27;
+      --color-elevated: #222634;
+      --color-hover: #2a2f3e;
+      --color-primary: #7aa2f7;
+      --color-ink: #c0caf5;
+      --color-muted: #565f89;
+      --color-line: #292e42;
+      --color-danger: #e05050;
+      --color-warn: #e09050;
+      --color-ok: #50c878;
+    }
+  </style>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--color-bg);
+      color: var(--color-ink);
+      font-family: 'Inter', system-ui, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 32px 16px;
+      gap: 24px;
+    }
+    h1 { font-size: 16px; font-weight: 600; margin: 0; }
+    .hint { font-size: 12px; color: var(--color-muted); }
+    .stage { display: flex; gap: 40px; flex-wrap: wrap; justify-content: center; align-items: flex-start; }
+    .screen { display: flex; flex-direction: column; gap: 8px; align-items: center; }
+    .screen-label {
+      font-size: 11px; color: var(--color-muted);
+      letter-spacing: 0.05em; text-transform: uppercase;
+    }
+  </style>
+  <script type="module" src="./components/dicto-popup.js"></script>
+</head>
+<body>
+  <h1>Dicto — Quick Translate Popup</h1>
+  <div class="hint">Playback states and Options are interactive — click play / seek / pickers. Pickers show chips for short lists, dropdowns for long ones.</div>
+
+  <div class="stage">
+    <div class="screen"><span class="screen-label">1 · Idle</span><dicto-popup id="p1"></dicto-popup></div>
+    <div class="screen"><span class="screen-label">2 · Loading</span><dicto-popup id="p2"></dicto-popup></div>
+    <div class="screen"><span class="screen-label">3 · Ready</span><dicto-popup id="p3"></dicto-popup></div>
+    <div class="screen"><span class="screen-label">4 · Ready + Options</span><dicto-popup id="p4"></dicto-popup></div>
+    <div class="screen"><span class="screen-label">5 · Error</span><dicto-popup id="p5"></dicto-popup></div>
+    <div class="screen"><span class="screen-label">6 · Too long</span><dicto-popup id="p6"></dicto-popup></div>
+  </div>
+
+  <script type="module">
+    const TRANSLATION =
+      'روباه سریع قهوه‌ای از روی سگ تنبل می‌پرد. هر متنی را روی صفحه انتخاب کنید و کلید میان‌بر را فشار دهید تا ترجمه شود.';
+
+    const config = {
+      p1: { state: 'idle', src: { playback: 'idle', value: 0 }, tr: { playback: 'idle', value: 0 } },
+      p2: { state: 'loading', src: { playback: 'loading', value: 0 }, tr: { playback: 'idle', value: 0 } },
+      p3: { state: 'ready', translation: TRANSLATION,
+            src: { playback: 'playing', value: 0.35 }, tr: { playback: 'ended', value: 1 } },
+      p4: { state: 'ready', translation: 'روباه سریع قهوه‌ای از روی سگ تنبل می‌پرد.', optionsOpen: true,
+            src: { playback: 'paused', value: 0.6 }, tr: { playback: 'loading', value: 0 } },
+      p5: { state: 'error', src: { playback: 'idle', value: 0 }, tr: { playback: 'idle', value: 0 } },
+      p6: { state: 'toolong', original: ('Chapter 1 — The entire first chapter of the novel would appear here, ' +
+        'but it is far beyond what the translator will accept in a single request. ').repeat(24),
+        src: { playback: 'idle', value: 0 }, tr: { playback: 'idle', value: 0 } },
+    };
+    for (const [id, props] of Object.entries(config)) {
+      Object.assign(document.getElementById(id), props);
+    }
+
+    // Interactive: clicking the play button in any section cycles that slot's
+    // playback state, so every state combination can be previewed.
+    document.querySelectorAll('dicto-popup').forEach((popup) => {
+      popup.addEventListener('action', (e) => {
+        const section = e.composedPath().find((el) => el.tagName === 'DICTO-SECTION');
+        if (!section) return;
+        const order = ['idle', 'loading', 'playing', 'paused', 'ended'];
+        const which = section.label === 'Original' ? 'src' : 'tr';
+        const cur = popup[which].playback;
+        const next = order[(order.indexOf(cur) + 1) % order.length];
+        popup[which] = { playback: next, value: next === 'ended' ? 1 : next === 'playing' ? 0.3 : 0.5 };
+      });
+    });
+  </script>
+</body>
+</html>

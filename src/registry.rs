@@ -80,6 +80,25 @@ impl DictionaryRegistry {
         exact
     }
 
+    /// Fuzzy near-matches for `word`, merged across dictionaries in
+    /// registration order, deduplicated, excluding the word itself.
+    pub fn related_words(&self, word: &str, limit: usize) -> Vec<String> {
+        let p = word.to_lowercase();
+        let mut seen = std::collections::HashSet::new();
+        let mut results: Vec<String> = Vec::new();
+        for d in &self.dictionaries {
+            for w in d.related_words(&p, limit) {
+                if w != p && seen.insert(w.clone()) {
+                    results.push(w);
+                    if results.len() >= limit {
+                        return results;
+                    }
+                }
+            }
+        }
+        results
+    }
+
     pub fn lookup_resource(&self, path: &str) -> Option<Vec<u8>> {
         self.dictionaries.iter().find_map(|d| d.resource(path))
     }
@@ -120,6 +139,12 @@ pub fn query_all(word: &str) -> Vec<DictHit> {
 
 pub fn suggestions(prefix: &str, limit: usize) -> Vec<String> {
     REGISTRY.read().unwrap().suggestions(prefix, limit)
+}
+
+/// Fuzzy near-matches for `word` across all enabled dictionaries,
+/// deduplicated, excluding the word itself.
+pub fn related_words(word: &str, limit: usize) -> Vec<String> {
+    REGISTRY.read().unwrap().related_words(word, limit)
 }
 
 pub fn lookup_resource(path: &str) -> Option<Vec<u8>> {
@@ -167,6 +192,15 @@ mod tests {
                 .map(|w| w.to_string())
                 .collect()
         }
+        fn related_words(&self, word: &str, limit: usize) -> Vec<String> {
+            let p = word.to_lowercase();
+            self.words
+                .iter()
+                .filter(|w| **w != p && levenshtein(&p, w) <= 2)
+                .take(limit)
+                .map(|w| w.to_string())
+                .collect()
+        }
         fn resource(&self, _path: &str) -> Option<Vec<u8>> {
             unimplemented!()
         }
@@ -202,6 +236,51 @@ mod tests {
         ]);
         let got = r.suggestions("run", 50);
         assert_eq!(got.first().map(String::as_str), Some("run"));
+    }
+
+    /// Plain DP edit distance — small words only, test helper.
+    fn levenshtein(a: &str, b: &str) -> usize {
+        let a: Vec<char> = a.chars().collect();
+        let b: Vec<char> = b.chars().collect();
+        let mut prev: Vec<usize> = (0..=b.len()).collect();
+        for (i, ca) in a.iter().enumerate() {
+            let mut cur = vec![i + 1];
+            for (j, cb) in b.iter().enumerate() {
+                let cost = usize::from(ca != cb);
+                cur.push((prev[j] + cost).min(prev[j + 1] + 1).min(cur[j] + 1));
+            }
+            prev = cur;
+        }
+        prev[b.len()]
+    }
+
+    #[test]
+    fn related_words_merge_across_dicts_and_exclude_exact() {
+        let r = registry(vec![
+            MockDict {
+                words: vec!["wood", "woods", "wool"],
+            },
+            MockDict {
+                words: vec!["word", "would", "zebra"],
+            },
+        ]);
+        let got = r.related_words("wood", 10);
+        // "woods"/"word" within distance 2, "zebra" is not; "wood" itself
+        // must never appear.
+        assert!(got.contains(&"woods".to_string()));
+        assert!(got.contains(&"word".to_string()));
+        assert!(got.contains(&"would".to_string()));
+        assert!(!got.contains(&"wood".to_string()));
+        assert!(!got.contains(&"zebra".to_string()));
+    }
+
+    #[test]
+    fn related_words_respects_limit() {
+        let words: Vec<&'static str> = (0..20)
+            .map(|i| Box::leak(format!("run{i}").into_boxed_str()) as &'static str)
+            .collect();
+        let r = registry(vec![MockDict { words }]);
+        assert_eq!(r.related_words("run", 5).len(), 5);
     }
 
     #[test]
