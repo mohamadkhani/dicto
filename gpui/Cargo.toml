@@ -1,6 +1,6 @@
 [package]
 name = "dicto"
-version = "0.6.2"
+version = "0.6.4"
 edition = "2024"
 authors = ["Mohammadreza Khani"]
 license = "AGPL-3.0-or-later"
@@ -39,6 +39,9 @@ global-hotkey = "0.5"
 
 [build-dependencies]
 embed-resource = "3.0"
+
+[dev-dependencies]
+gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe", features = ["test-support"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # ashpd shares zbus with gpui_linux (which forces async-io), so we must use the
