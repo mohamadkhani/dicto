@@ -20,7 +20,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Build
-        run: cargo build --release --package dicto
+        run: cargo build --locked --release --package dicto
 
       - name: Compress binary with UPX
         run: upx --best --lzma target/release/dicto
@@ -75,7 +75,7 @@ jobs:
         run: choco install upx -y --no-progress
 
       - name: Build Windows executable (release)
-        run: cargo build --release --package dicto
+        run: cargo build --locked --release --package dicto
 
       - name: Compress binary with UPX
         shell: bash
