@@ -26,6 +26,7 @@ use crate::html::parser::{Block, BlockLayout, Inline, Link, Style};
 /// every render pass; SharedString text fields make leaf clones cheap.
 pub fn render_blocks(blocks: &[Block]) -> gpui::AnyElement {
     v_flex()
+        .debug_selector(|| "definition-blocks".into())
         .w_full()
         .gap(px(8.))
         .children(
@@ -121,11 +122,17 @@ fn list_item(idx: usize, _ordered: bool, depth: u8, content: &[Inline]) -> gpui:
         .items_start()
         .child(
             div()
+                .flex_shrink_0()
                 .text_size(px(14.))
                 .text_color(colors::text_secondary())
                 .child("•"),
         )
-        .child(paragraph(idx, content, 14.0, None))
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .child(paragraph(idx, content, 14.0, None)),
+        )
         .into_any_element()
 }
 
@@ -229,8 +236,10 @@ fn render_link_group(
         .id(SharedString::from(format!("grp-{block_idx}-{run_idx}")))
         .items_center()
         .gap(px(0.))
+        .flex_wrap()
         .flex_shrink(0.)
-        .min_w(px(0.));
+        .min_w(px(0.))
+        .max_w_full();
 
     if let Some(bg) = first
         .style
@@ -352,6 +361,7 @@ fn styled_span(
     if let Some(Link::Entry(word)) = link {
         let target = word.clone();
         let mut el = div()
+            .debug_selector(|| format!("span-{block_idx}-{run_idx}"))
             .id(SharedString::from(format!("r-{block_idx}-{run_idx}")))
             .text_size(px(size_px))
             .font_weight(font_weight)
@@ -359,6 +369,7 @@ fn styled_span(
             .cursor_pointer()
             .flex_shrink(0.)
             .min_w(px(0.))
+            .max_w_full()
             .on_click(move |_, _, _cx| {
                 debug!("entry link clicked: {target}");
             });
@@ -375,11 +386,13 @@ fn styled_span(
     }
 
     let mut el = div()
+        .debug_selector(|| format!("span-{block_idx}-{run_idx}"))
         .text_size(px(size_px))
         .font_weight(font_weight)
         .text_color(color)
         .flex_shrink(0.)
-        .min_w(px(0.));
+        .min_w(px(0.))
+        .max_w_full();
     if let Some(bg) = bg {
         el = el.bg(bg);
         // Non-link spans with a background are "chips" (e.g. WordNet
@@ -728,4 +741,87 @@ fn hue_to_rgb(p: f32, q: f32, mut t: f32) -> f32 {
         return p + (q - p) * (2.0 / 3.0 - t) * 6.0;
     }
     p
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{Context, Render, TestAppContext, Window};
+
+    struct DefinitionView {
+        blocks: Vec<Block>,
+        scroll: bool,
+    }
+
+    impl Render for DefinitionView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let mut card = v_flex().id("test-definition").w(px(240.));
+            if self.scroll {
+                card = card.h(px(100.)).overflow_y_scroll();
+            }
+            card.child(render_blocks(&self.blocks))
+        }
+    }
+
+    #[gpui::test]
+    fn long_definition_stays_inside_card(cx: &mut TestAppContext) {
+        let sentence =
+            "A long dictionary definition with enough words to wrap across several lines. "
+                .repeat(8);
+        for html in [
+            format!("<p>{sentence}</p>"),
+            format!("<p><b>Meaning:</b> {sentence}<i>ending</i></p>"),
+            format!("<ul><li>{sentence}</li></ul>"),
+            format!("<p><a href=\"entry://meaning\">{sentence}</a></p>"),
+            format!(
+                "<p><a href=\"entry://meaning\" class=\"chip\"><b>Meaning:</b> {sentence}</a></p>"
+            ),
+        ] {
+            let sheet =
+                crate::html::Stylesheet::parse(".chip { background-color: blue; padding: 4px; }");
+            let blocks = crate::html::parse_with_styles(&html, &sheet);
+            let (_, visual) = cx.add_window_view(|_, _| DefinitionView {
+                blocks,
+                scroll: false,
+            });
+            let body = visual.debug_bounds("definition-blocks").unwrap();
+            for selector in ["span-0-0", "span-0-1", "span-0-2"] {
+                if let Some(span) = visual.debug_bounds(selector) {
+                    assert!(
+                        span.right() <= body.right(),
+                        "text exceeds card width: {span:?} vs {body:?}"
+                    );
+                    assert!(
+                        span.bottom() <= body.bottom(),
+                        "text exceeds card height: {span:?} vs {body:?}"
+                    );
+                }
+            }
+            assert!(
+                body.size.height > px(100.),
+                "long definition did not wrap: {body:?}"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn scrollable_definition_keeps_its_full_height(cx: &mut TestAppContext) {
+        let html = "<p>A long definition with words that wrap onto multiple lines in the card.</p>"
+            .repeat(20);
+        let blocks = crate::html::parse_with_styles(&html, &Default::default());
+        let (_, cx) = cx.add_window_view(|_, _| DefinitionView {
+            blocks,
+            scroll: true,
+        });
+        let body = cx.debug_bounds("definition-blocks").unwrap();
+        let last = cx.debug_bounds("span-19-0").unwrap();
+        assert!(
+            last.bottom() <= body.bottom(),
+            "last line is outside scrollable content: {last:?} vs {body:?}"
+        );
+        assert!(
+            body.size.height > px(100.),
+            "definition shrank to viewport height: {body:?}"
+        );
+    }
 }
