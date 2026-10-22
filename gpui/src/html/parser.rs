@@ -511,15 +511,15 @@ fn apply_decls(decls: &HashMap<String, String>, style: &mut Style) {
                     style.bold = true;
                 }
             }
-            "font-style" => {
-                if v.eq_ignore_ascii_case("italic") || v.eq_ignore_ascii_case("oblique") {
-                    style.italic = true;
-                }
+            "font-style"
+                if v.eq_ignore_ascii_case("italic") || v.eq_ignore_ascii_case("oblique") =>
+            {
+                style.italic = true;
             }
-            "text-decoration" | "text-decoration-line" => {
-                if v.to_ascii_lowercase().contains("underline") {
-                    style.underline = true;
-                }
+            "text-decoration" | "text-decoration-line"
+                if v.to_ascii_lowercase().contains("underline") =>
+            {
+                style.underline = true;
             }
             "font-size" => {
                 if let Some(px) = parse_css_length(v, 14.0) {

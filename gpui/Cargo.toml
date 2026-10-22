@@ -41,7 +41,7 @@ global-hotkey = "0.5"
 embed-resource = "3.0"
 
 [dev-dependencies]
-gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe", features = ["test-support"] }
+gpui = { git = "https://github.com/mohamadkhani/zed", rev = "c612da6503499b7242ce60e7aa893184d63043ec", features = ["test-support"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # ashpd shares zbus with gpui_linux (which forces async-io), so we must use the
