@@ -31,7 +31,7 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Build
-        run: cargo build --release --package dicto
+        run: cargo build --locked --release --package dicto
 
       # The .deb is built from the UNPACKED binary so its dependency and
       # glibc metadata are computed from real ELF data (UPX would hide it);
@@ -92,7 +92,7 @@ jobs:
         run: choco install upx -y --no-progress
 
       - name: Build Windows executable (release)
-        run: cargo build --release --package dicto
+        run: cargo build --locked --release --package dicto
 
       - name: Compress binary with UPX
         shell: bash
