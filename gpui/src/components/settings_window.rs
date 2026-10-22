@@ -34,13 +34,14 @@ pub fn header_tabs_for_dialog(
                 .child(Tab::new().label("Dictionaries"))
                 .child(Tab::new().label("Import"))
                 .child(Tab::new().label("Download"))
+                .child(Tab::new().label("Quick Translate"))
                 .child(Tab::new().label("Telemetry"))
                 .child(Tab::new().label("About")),
         )
         .into_any_element()
 }
 
-/// Map a settings tab index (0-4) to its [`SettingsTab`] variant for
+/// Map a settings tab index (0-5) to its [`SettingsTab`] variant for
 /// telemetry. Returns `None` if the index doesn't match a known tab, so
 /// a future re-order never fires a bogus event — it goes silent instead.
 fn settings_tab_from_index(ix: usize) -> Option<dicto_telemetry::SettingsTab> {
@@ -48,8 +49,9 @@ fn settings_tab_from_index(ix: usize) -> Option<dicto_telemetry::SettingsTab> {
         0 => Some(dicto_telemetry::SettingsTab::Dictionaries),
         1 => Some(dicto_telemetry::SettingsTab::Import),
         2 => Some(dicto_telemetry::SettingsTab::Download),
-        3 => Some(dicto_telemetry::SettingsTab::Telemetry),
-        4 => Some(dicto_telemetry::SettingsTab::About),
+        3 => Some(dicto_telemetry::SettingsTab::QuickTranslate),
+        4 => Some(dicto_telemetry::SettingsTab::Telemetry),
+        5 => Some(dicto_telemetry::SettingsTab::About),
         _ => None,
     }
 }

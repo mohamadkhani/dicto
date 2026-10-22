@@ -1,0 +1,134 @@
+name: Test Build
+
+on:
+  pull_request:
+  push:
+    branches: ["**"]
+  workflow_dispatch:  # Manual run without a PR
+
+concurrency:
+  group: pr-build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PR_ID: ${{ github.event.pull_request.number || github.run_number }}
+
+jobs:
+  package-check:
+    # Proves the crate is publishable without touching crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish dry-run (mdict-rs)
+        run: cargo publish --dry-run --package mdict-rs
+
+  build-linux:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm base-devel git gtk3 alsa-lib libxkbcommon libxkbcommon-x11 xdotool upx dpkg namcap sudo
+
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # CI-test version: sorts BELOW the real release (0.6.2~abc1234 < 0.6.2),
+      # so installing the tagged package over a test one upgrades cleanly.
+      - name: Derive version
+        id: version
+        run: |
+          VERSION="$(grep -m1 '^version' gpui/Cargo.toml | sed 's/.*"\(.*\)"/\1/')~${GITHUB_SHA::7}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: cargo build --release --package dicto
+
+      # Built from the UNPACKED binary (UPX would hide ELF dependency data);
+      # build-deb.sh strips its own staged copy.
+      - name: Package Debian / Ubuntu (.deb)
+        run: |
+          packaging/debian/build-deb.sh "${{ steps.version.outputs.version }}" \
+            target/release/dicto dist amd64
+
+      # Tests the AUR PKGBUILD's package() without recompiling: the PKGBUILD
+      # normally builds from the tag tarball (which does not exist on
+      # branches), so build() is pointed at the already-built binary and the
+      # source at a local tarball of this checkout. Runs BEFORE UPX (makepkg
+      # strips, which UPX-packed binaries do not survive). --nodeps skips the
+      # makedepends (cargo) check we deliberately bypass; namcap still lints
+      # the resulting package's depends against its ELF libraries.
+      - name: Package Arch (.pkg.tar.zst) from prebuilt binary
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          PKGVER="${VERSION%%~*}"
+          mkdir -p /pkgbuild /prebuilt
+          cp target/release/dicto /prebuilt/dicto
+          cp packaging/arch/dicto/PKGBUILD /pkgbuild/PKGBUILD
+          sed -i "s/^pkgver=.*/pkgver=${PKGVER}/" /pkgbuild/PKGBUILD
+          sed -i 's|source=(.*)|source=("$pkgname-$pkgver.tar.gz")|' /pkgbuild/PKGBUILD
+          sed -i 's|cargo build --release --package dicto|install -Dm755 /prebuilt/dicto "$CARGO_TARGET_DIR/release/dicto"|' /pkgbuild/PKGBUILD
+          sed -i "s/'PLACEHOLDER'/'SKIP'/" /pkgbuild/PKGBUILD
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git archive --prefix="dicto-${PKGVER}/" --format=tar.gz -o "/pkgbuild/dicto-${PKGVER}.tar.gz" HEAD
+          useradd -m builder
+          chown -R builder:builder /pkgbuild
+          sudo -u builder bash -c 'cd /pkgbuild && makepkg -f --noconfirm --nodeps'
+          namcap /pkgbuild/dicto-*.pkg.tar.zst
+
+      - name: Compress binary with UPX
+        run: upx --best --lzma target/release/dicto
+
+      - name: Package tarball
+        run: |
+          mkdir -p dist
+          cp target/release/dicto dist/
+          cp packaging/arch/dicto.desktop dist/
+          cp assets/icon.svg dist/
+          cp LICENSE dist/
+          cd dist
+          tar czf ../dicto-pr-${PR_ID}-x86_64-unknown-linux-gnu.tar.gz \
+            dicto dicto.desktop icon.svg LICENSE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dicto-pr${{ env.PR_ID }}-linux
+          path: |
+            dicto-*.tar.gz
+            dist/*.deb
+            /pkgbuild/dicto-*.pkg.tar.zst
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install UPX
+        run: choco install upx -y --no-progress
+
+      - name: Build Windows executable (release)
+        run: cargo build --release --package dicto
+
+      - name: Compress binary with UPX
+        shell: bash
+        run: upx --best --lzma target/release/dicto.exe
+
+      - name: Create portable package
+        run: |
+          mkdir portable
+          copy target\release\dicto.exe portable\
+          copy LICENSE portable\
+          copy README.md portable\
+          Compress-Archive -Path portable\* -DestinationPath dicto-pr-$env:PR_ID-windows-x86_64-portable.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dicto-pr${{ env.PR_ID }}-windows
+          path: dicto-*-windows-x86_64-portable.zip

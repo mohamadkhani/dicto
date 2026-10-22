@@ -5,16 +5,17 @@ use mdict_rs::settings::enabled_mdx;
 
 mod handlers;
 
-use crate::handlers::{handle_lucky, handle_query};
+use std::error::Error;
 
 use axum::{
     Router,
     routing::{get, post},
 };
-use std::error::Error;
 use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+
+use crate::handlers::{handle_lucky, handle_query};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
