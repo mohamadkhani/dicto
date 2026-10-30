@@ -1238,7 +1238,7 @@ fn open_settings_dialog(state: Entity<DictState>, window: &mut Window, cx: &mut 
             .title(div().child("Settings"))
             // Wide enough for all six tabs; the Dialog default (448px)
             // clips the tab bar. `.w_full()` does not change the card width.
-            .w(px(720.))
+            .w(px(520.))
             .h(px(560.))
             .close_button(true)
             .overlay_closable(true)
