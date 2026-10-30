@@ -105,6 +105,23 @@ pub struct PortalShared {
 }
 
 impl PortalShared {
+    /// Shared state singleton (see `PORTAL_SHARED`).
+    ///
+    /// `next_seq` starts at 1 so the first pushed event gets seq 1: the
+    /// handle cursor starts at 0 meaning "nothing examined", and `try_recv`
+    /// skips `seq <= cursor`. When 0 was a real seq, the first activation
+    /// after startup was silently swallowed ("first hotkey press does
+    /// nothing, second works"). Locked by `tests::first_pushed_event_is_delivered`.
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            desired: Mutex::new(Vec::new()),
+            generation: AtomicU64::new(0),
+            events: Mutex::new(Vec::new()),
+            next_seq: AtomicU64::new(1),
+            state: Mutex::new(PortalState::Connecting),
+        })
+    }
+
     fn set_state(&self, state: PortalState) {
         *self.state.lock().unwrap() = state;
     }
@@ -158,13 +175,7 @@ static OPTIMISTIC: AtomicBool = AtomicBool::new(false);
 pub fn portal_handle() -> Option<PortalHotkeyManager> {
     let shared = PORTAL_SHARED
         .get_or_init(|| {
-            let shared = Arc::new(PortalShared {
-                desired: Mutex::new(Vec::new()),
-                generation: AtomicU64::new(0),
-                events: Mutex::new(Vec::new()),
-                next_seq: AtomicU64::new(0),
-                state: Mutex::new(PortalState::Connecting),
-            });
+            let shared = PortalShared::new();
             let thread_shared = shared.clone();
             match std::thread::Builder::new()
                 .name("portal-hotkey".into())
@@ -448,4 +459,44 @@ async fn register_app_id(
     registry.register(APP_ID, empty_opts).await?;
     info!(app_id = APP_ID, "portal: registered app_id with portal");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_shared() -> Arc<PortalShared> {
+        PortalShared::new()
+    }
+
+    /// Regression lock for "the first word-lookup hotkey press after startup
+    /// does nothing, the second works": `push_event` handed out seq 0 to the
+    /// first activation while the handle's cursor starts at 0, and
+    /// `try_recv`'s `seq <= cursor` check swallowed it as already-consumed.
+    /// Every first activation after startup was lost.
+    #[test]
+    fn first_pushed_event_is_delivered() {
+        let shared = test_shared();
+        let mgr = PortalHotkeyManager::new(shared.clone());
+        mgr.register("quick_lookup", "Ctrl+Alt+W").unwrap();
+        shared.push_event("quick_lookup".to_string());
+        assert_eq!(
+            mgr.try_recv(),
+            Some("quick_lookup".to_string()),
+            "the first activation event must reach the handle"
+        );
+    }
+
+    /// Draining keeps working: events arrive in order, each delivered once.
+    #[test]
+    fn events_drain_in_order_and_do_not_repeat() {
+        let shared = test_shared();
+        let mgr = PortalHotkeyManager::new(shared.clone());
+        mgr.register("quick_lookup", "Ctrl+Alt+W").unwrap();
+        shared.push_event("quick_lookup".to_string());
+        shared.push_event("quick_lookup".to_string());
+        assert_eq!(mgr.try_recv(), Some("quick_lookup".to_string()));
+        assert_eq!(mgr.try_recv(), Some("quick_lookup".to_string()));
+        assert_eq!(mgr.try_recv(), None);
+    }
 }
