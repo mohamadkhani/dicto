@@ -475,6 +475,14 @@ impl Render for DictApp {
             !s.translation_ready() && !s.ai_setup_hint_dismissed
         };
 
+        // Word Lookup nudge: the feature ships disabled, so most users never
+        // discover it. Introduce it once at least one dictionary is
+        // configured, until it is enabled or the banner is dismissed.
+        let word_lookup_hint = {
+            let s = self.state.read(cx);
+            !s.word_lookup.enabled && !s.word_lookup_hint_dismissed && !s.dictionaries.is_empty()
+        };
+
         let input_handle = self.input.clone();
         let main = v_flex()
             .size_full()
@@ -495,6 +503,7 @@ impl Render for DictApp {
             )
             .children(window_calls_hint.then(|| window_calls_banner(&self.state, cx)))
             .children(ai_setup_hint.then(|| ai_setup_banner(&self.state, cx)))
+            .children(word_lookup_hint.then(|| word_lookup_banner(&self.state, cx)))
             // Search row hosts the cog on its right edge so the button
             // sits outside the title bar's OS-claimed drag region.
             .child(search_bar::search_bar(
@@ -876,8 +885,8 @@ fn ai_setup_banner(state: &Entity<DictState>, cx: &Context<DictApp>) -> gpui::An
                         .on_click(cx.listener(move |_this, _ev, window, cx| {
                             cx.update_entity(&configure_state, |s, cx| {
                                 // Quick Translate tab (0 Dictionaries, 1 Import,
-                                // 2 Download, 3 Quick Translate).
-                                s.settings_active_tab = 3;
+                                // 2 Download, 3 Word Lookup, 4 Quick Translate).
+                                s.settings_active_tab = 4;
                                 cx.notify();
                             });
                             open_settings_dialog(configure_state.clone(), window, cx);
@@ -905,6 +914,121 @@ fn ai_setup_banner(state: &Entity<DictState>, cx: &Context<DictApp>) -> gpui::An
                                 cx.notify();
                             });
                             let _ = mdict_rs::settings::set_ai_setup_hint_dismissed(true);
+                        })),
+                ),
+        )
+        .into_any_element()
+}
+
+/// Startup nudge for the Word Lookup feature. It ships disabled, so most
+/// users never discover it. Shown only while it is off, at least one
+/// dictionary is configured, and the user hasn't dismissed it. "Enable"
+/// turns it on in place; "Settings" opens the Word Lookup tab; the close
+/// button persists the dismissal in settings.toml (same pattern as
+/// [`ai_setup_banner`]).
+fn word_lookup_banner(state: &Entity<DictState>, cx: &Context<DictApp>) -> gpui::AnyElement {
+    let dismiss_state = state.clone();
+    let settings_state = state.clone();
+    let enable_state = state.clone();
+    let hotkey = state.read(cx).word_lookup.hotkey.clone();
+
+    h_flex()
+        .w_full()
+        .items_center()
+        .justify_between()
+        .gap(px(8.))
+        .px(px(12.))
+        .py(px(6.))
+        .bg(colors::surface())
+        .border_b_1()
+        .border_color(colors::border())
+        .child(
+            h_flex()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(colors::update())
+                        .child("✨"),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(colors::text_secondary())
+                        .child(SharedString::from(format!(
+                            "Word Lookup: select a word anywhere and press {hotkey} \
+                             for its definition — works offline."
+                        ))),
+                ),
+        )
+        .child(
+            h_flex()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .id("wl-enable-banner")
+                        .cursor_pointer()
+                        .px(px(8.))
+                        .py(px(3.))
+                        .rounded(px(6.))
+                        .text_size(px(12.))
+                        .text_color(colors::bg())
+                        .bg(colors::primary())
+                        .hover(|s| s.opacity(0.9))
+                        .child("Enable")
+                        .on_click(cx.listener(move |_this, _ev, _window, cx| {
+                            crate::components::word_lookup_panel::set_word_lookup_enabled(
+                                enable_state.clone(),
+                                true,
+                                cx,
+                            );
+                        })),
+                )
+                .child(
+                    div()
+                        .id("wl-settings-banner")
+                        .cursor_pointer()
+                        .px(px(8.))
+                        .py(px(3.))
+                        .rounded(px(6.))
+                        .text_size(px(12.))
+                        .text_color(colors::primary())
+                        .border_1()
+                        .border_color(colors::border())
+                        .hover(|s| s.bg(colors::hover()))
+                        .child("Settings")
+                        .on_click(cx.listener(move |_this, _ev, window, cx| {
+                            cx.update_entity(&settings_state, |s, cx| {
+                                // Word Lookup tab (0 Dictionaries, 1 Import,
+                                // 2 Download, 3 Word Lookup).
+                                s.settings_active_tab = 3;
+                                cx.notify();
+                            });
+                            open_settings_dialog(settings_state.clone(), window, cx);
+                        })),
+                )
+                .child(
+                    v_flex()
+                        .id("wl-dismiss-banner")
+                        .cursor_pointer()
+                        .size(px(22.))
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(6.))
+                        .hover(|s| s.bg(colors::hover()))
+                        .child(
+                            gpui::svg()
+                                .path("icons/close.svg")
+                                .self_center()
+                                .size(px(14.))
+                                .text_color(colors::text_secondary()),
+                        )
+                        .on_click(cx.listener(move |_this, _ev, _window, cx| {
+                            cx.update_entity(&dismiss_state, |s, cx| {
+                                s.word_lookup_hint_dismissed = true;
+                                cx.notify();
+                            });
+                            let _ = mdict_rs::settings::set_word_lookup_hint_dismissed(true);
                         })),
                 ),
         )
@@ -997,17 +1121,23 @@ fn open_settings_dialog(state: Entity<DictState>, window: &mut Window, cx: &mut 
 
         dialog
             .title(div().child("Settings"))
-            .w_full()
+            // Wide enough for all eight tabs; the Dialog default (448px)
+            // clips the tab bar. `.w_full()` does not change the card width.
+            .w(px(720.))
             .h(px(560.))
             .close_button(true)
             .overlay_closable(true)
             .content(move |content, window, cx| {
                 let active_tab = state.read(cx).settings_active_tab;
 
-                content.child(
+                // `min_h(0)` lets the flex chain shrink below its content,
+                // so a tall tab scrolls inside the fixed-height card instead
+                // of clipping (flex items default to a min-content height).
+                content.flex_1().min_h(px(0.)).child(
                     v_flex()
                         .w_full()
-                        .h_full()
+                        .flex_1()
+                        .min_h(px(0.))
                         .gap(px(12.))
                         .child(crate::components::settings_window::header_tabs_for_dialog(
                             state.clone(),
@@ -1039,17 +1169,27 @@ fn open_settings_dialog(state: Entity<DictState>, window: &mut Window, cx: &mut 
                                 cx,
                             )
                         } else if active_tab == 3 {
+                            crate::components::word_lookup_panel::word_lookup_tab_content(
+                                state.clone(),
+                                cx,
+                            )
+                        } else if active_tab == 4 {
                             crate::components::quick_translate_panel::quick_translate_tab_content(
                                 state.clone(),
                                 window,
                                 cx,
                             )
-                        } else if active_tab == 4 {
+                        } else if active_tab == 5 {
+                            crate::components::shortcuts_panel::shortcuts_tab_content(
+                                state.clone(),
+                                cx,
+                            )
+                        } else if active_tab == 6 {
                             crate::components::settings_panel::telemetry_tab_content(
                                 state.clone(),
                                 cx,
                             )
-                        } else if active_tab == 5 {
+                        } else if active_tab == 7 {
                             crate::components::about_panel::panel_content()
                         } else {
                             let is_importing = state.read(cx).import_files.iter().any(|f| {

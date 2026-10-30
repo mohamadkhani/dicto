@@ -50,6 +50,10 @@ pub struct Settings {
     /// Persisted so it is shown at most once per decision.
     #[serde(default)]
     pub ai_setup_hint_dismissed: bool,
+    /// User dismissed the "enable Word Lookup" nudge banner.
+    /// Persisted so it is shown at most once per decision.
+    #[serde(default)]
+    pub word_lookup_hint_dismissed: bool,
 }
 
 impl Default for Settings {
@@ -65,6 +69,7 @@ impl Default for Settings {
             auto_shortcuts: default_auto_shortcuts(),
             window_calls_hint_dismissed: false,
             ai_setup_hint_dismissed: false,
+            word_lookup_hint_dismissed: false,
         }
     }
 }
@@ -378,6 +383,19 @@ pub fn set_ai_setup_hint_dismissed(dismissed: bool) -> anyhow::Result<()> {
         return Ok(());
     }
     current.ai_setup_hint_dismissed = dismissed;
+    save(&current)?;
+    *SETTINGS.write().unwrap() = current;
+    Ok(())
+}
+
+/// Persist the "enable Word Lookup" nudge dismissal, preserving every
+/// other field (same pattern as [`update_consent`]).
+pub fn set_word_lookup_hint_dismissed(dismissed: bool) -> anyhow::Result<()> {
+    let mut current = current();
+    if current.word_lookup_hint_dismissed == dismissed {
+        return Ok(());
+    }
+    current.word_lookup_hint_dismissed = dismissed;
     save(&current)?;
     *SETTINGS.write().unwrap() = current;
     Ok(())

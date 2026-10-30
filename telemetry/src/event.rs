@@ -171,7 +171,9 @@ pub enum SettingsTab {
     Dictionaries,
     Import,
     Download,
+    WordLookup,
     QuickTranslate,
+    Shortcuts,
     Telemetry,
     About,
 }
@@ -182,7 +184,9 @@ impl SettingsTab {
             Self::Dictionaries => "dictionaries",
             Self::Import => "import",
             Self::Download => "download",
+            Self::WordLookup => "word_lookup",
             Self::QuickTranslate => "quick_translate",
+            Self::Shortcuts => "shortcuts",
             Self::Telemetry => "telemetry",
             Self::About => "about",
         }

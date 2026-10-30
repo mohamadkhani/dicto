@@ -118,6 +118,18 @@ impl WordLookupEngine {
         }
     }
 
+    /// Attach a hotkey manager built off the UI thread (see
+    /// [`make_hotkey_manager`]). Pass `None` to drop the current one.
+    pub fn set_hotkey_manager(&mut self, manager: Option<Box<dyn HotkeyManager>>) {
+        self.hotkey_manager = manager;
+    }
+
+    /// Update the settings snapshot without touching hotkey registration.
+    /// The async toggle flow calls this after attaching the manager.
+    pub fn set_settings(&mut self, settings: WordLookupSettings) {
+        self.settings = settings;
+    }
+
     /// Poll for hotkey events. Returns `true` if the lookup hotkey fired.
     /// Drains only — the popup opens via [`trigger_lookup`](Self::trigger_lookup).
     pub fn poll(&mut self) -> bool {
@@ -332,6 +344,20 @@ fn normalize_word(text: &str) -> String {
         text.trim().to_string()
     } else {
         trimmed.to_string()
+    }
+}
+
+/// Build a hotkey manager for `settings`, logging failures as `None`.
+///
+/// Blocking on some backends: the XDG portal backend waits up to a few
+/// seconds for its first bind, so call this off the UI thread.
+pub fn make_hotkey_manager(settings: WordLookupSettings) -> Option<Box<dyn HotkeyManager>> {
+    match create_and_register(&settings) {
+        Ok(mgr) => Some(mgr),
+        Err(e) => {
+            warn!(error = %e, "word lookup: failed to register hotkey");
+            None
+        }
     }
 }
 

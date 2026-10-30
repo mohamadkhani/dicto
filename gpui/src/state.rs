@@ -84,7 +84,9 @@ pub struct DictState {
     /// Files being imported via the init/settings modal.
     pub import_files: Vec<ImportFile>,
 
-    /// Active tab in the settings dialog: 0 = Dictionaries, 1 = Import, 2 = Download.
+    /// Active tab in the settings dialog: 0 = Dictionaries, 1 = Import,
+    /// 2 = Download, 3 = Word Lookup, 4 = Quick Translate, 5 = Shortcuts,
+    /// 6 = Telemetry, 7 = About.
     pub settings_active_tab: usize,
 
     pub catalog: CatalogState,
@@ -186,6 +188,18 @@ pub struct DictState {
     /// (persisted in settings.toml).
     pub ai_setup_hint_dismissed: bool,
 
+    /// User dismissed the "enable Word Lookup" nudge banner
+    /// (persisted in settings.toml).
+    pub word_lookup_hint_dismissed: bool,
+
+    /// True while Word Lookup's hotkey is being registered off the UI
+    /// thread. Drives the "Registering…" state next to the toggle.
+    pub word_lookup_registering: bool,
+    /// Monotonic token for the async enable flow. A completed background
+    /// registration only attaches its manager if this still matches, so a
+    /// rapid off/on sequence can't attach a stale manager.
+    pub word_lookup_toggle_gen: u64,
+
     /// Live result of the [Test] button next to the translation API key
     /// field in the settings tab.
     pub qt_translation_test: QtKeyTest,
@@ -240,6 +254,7 @@ impl DictState {
             .map(|e| e.backend_name().to_string())
             .unwrap_or_else(|| "none".to_string());
         let auto_shortcuts = settings.auto_shortcuts;
+        let word_lookup_hint_dismissed = settings.word_lookup_hint_dismissed;
 
         let state = Self {
             word_list_scroll: gpui::ScrollHandle::new(),
@@ -264,6 +279,9 @@ impl DictState {
             word_lookup: wl_settings,
             hotkey_backend: backend,
             auto_shortcuts,
+            word_lookup_hint_dismissed,
+            word_lookup_registering: false,
+            word_lookup_toggle_gen: 0,
             quick_translate_engine: engine,
             word_lookup_engine,
             wl_related_scroll: gpui::ScrollHandle::new(),
@@ -387,6 +405,7 @@ impl DictState {
         current.quick_translate = self.quick_translate.clone();
         current.word_lookup = self.word_lookup.clone();
         current.auto_shortcuts = self.auto_shortcuts;
+        current.word_lookup_hint_dismissed = self.word_lookup_hint_dismissed;
         let _ = mdict_rs::settings::save(&current);
     }
 

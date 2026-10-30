@@ -14,6 +14,7 @@ use gpui::{
 use gpui_component::{
     h_flex,
     input::{Input, InputState},
+    scroll::ScrollableElement,
     v_flex,
 };
 
@@ -235,87 +236,6 @@ pub fn quick_translate_tab_content(
              Leave disabled to use system TTS (espeak-ng).",
         ));
 
-    // --- Word Lookup section ---
-    // Local dictionary popup: select a word anywhere, press the hotkey, see
-    // the definition. No network, no API key — reads the MDict dictionaries.
-    let wl_settings = state.read(cx).word_lookup.clone();
-    let wl_toggle_state = state.clone();
-    let wl_enabled = wl_settings.enabled;
-    let wl_enable_row = h_flex()
-        .justify_between()
-        .items_center()
-        .py(px(10.))
-        .child(
-            div()
-                .text_size(px(13.))
-                .text_color(colors::text())
-                .child(SharedString::from("Enable Word Lookup")),
-        )
-        .child(toggle_switch("wl-enable", wl_enabled, move |cx| {
-            wl_toggle_state.update(cx, |s, cx| {
-                s.word_lookup.enabled = !wl_enabled;
-                s.save_settings(cx);
-                s.reload_hotkey(cx);
-            });
-        }));
-
-    let wl_hotkey_row = h_flex()
-        .items_center()
-        .py(px(8.))
-        .gap(px(12.))
-        .child(
-            div()
-                .w(px(120.))
-                .text_size(px(12.))
-                .text_color(colors::text_secondary())
-                .child(SharedString::from("Global Hotkey")),
-        )
-        .child(
-            div()
-                .px(px(10.))
-                .py(px(5.))
-                .rounded(px(4.))
-                .bg(colors::bg())
-                .border_1()
-                .border_color(colors::border())
-                .text_size(px(12.))
-                .text_color(colors::text())
-                .child(SharedString::from(wl_settings.hotkey.clone())),
-        );
-
-    // Backend note (same treatment as the translate hotkey's note).
-    let wl_backend_note = wl_enabled.then(|| {
-        let backend = state
-            .read(cx)
-            .word_lookup_engine
-            .as_ref()
-            .map(|e| e.backend_name().to_string())
-            .unwrap_or_else(|| "none".to_string());
-        div()
-            .text_size(px(11.))
-            .text_color(colors::text_secondary())
-            .child(SharedString::from(format!(
-                "Hotkey backend: {}",
-                match backend.as_str() {
-                    "x11" => "X11 (fully supported)",
-                    "windows" => "Windows (fully supported)",
-                    "tray_menu" => "Tray menu only — use the tray icon to look up",
-                    other => other,
-                }
-            )))
-    });
-
-    // Smart-dispatch note: the translate hotkey already routes single words
-    // here when the feature is enabled.
-    let wl_note = div()
-        .text_size(px(11.))
-        .text_color(colors::text_secondary())
-        .child(SharedString::from(
-            "Looks the selected word up in your local dictionaries — no internet \
-             needed. With this enabled, the Quick Translate hotkey also opens the \
-             lookup when you select a single word; phrases still translate.",
-        ));
-
     // Warning if API key is missing
     let warning = if settings.enabled && settings.api_key.is_empty() {
         Some(
@@ -345,7 +265,7 @@ pub fn quick_translate_tab_content(
         .h_full()
         .p(px(4.))
         .id("qt-settings-scroll")
-        .overflow_y_scroll();
+        .overflow_y_scrollbar();
     body = body.child(header);
     body = body.child(divider());
     body = body.child(enable_row);
@@ -380,25 +300,6 @@ pub fn quick_translate_tab_content(
     }
     body = body.child(tts_note);
 
-    // Word Lookup section
-    body = body.child(divider());
-    body = body.child(section_title("Word Lookup"));
-    body = body.child(wl_enable_row);
-    if wl_enabled {
-        body = body.child(wl_hotkey_row);
-        if let Some(note) = wl_backend_note {
-            body = body.child(note);
-        }
-    }
-    body = body.child(wl_note);
-
-    // System Shortcuts section (Linux only — the auto-definition layer).
-    #[cfg(target_os = "linux")]
-    {
-        body = body.child(divider());
-        body = body.child(system_shortcuts_section(&state, cx));
-    }
-
     // Outer div participates in the parent's flex layout (flex_1 = remaining
     // height). The overflow wrapper from overflow_y_scroll loses flex_grow, so
     // we separate the two concerns: outer = flex sizing, inner = h_full scroll.
@@ -412,103 +313,6 @@ pub fn quick_translate_tab_content(
 
 // --- Helper widgets ---
 
-/// "System Shortcuts" section: the auto-definition toggle plus the live
-/// status of the OS-level shortcut layer (portal / GNOME keybindings /
-/// manual snippet). Backed by `hotkey::os_binding`.
-#[cfg(target_os = "linux")]
-fn system_shortcuts_section(state: &Entity<DictState>, cx: &gpui::App) -> gpui::AnyElement {
-    let auto_shortcuts = state.read(cx).auto_shortcuts;
-    let toggle_state = state.clone();
-    let auto_row = h_flex()
-        .justify_between()
-        .items_center()
-        .py(px(10.))
-        .child(
-            div()
-                .text_size(px(13.))
-                .text_color(colors::text())
-                .child(SharedString::from("Set up system shortcuts automatically")),
-        )
-        .child(toggle_switch("auto-shortcuts", auto_shortcuts, move |cx| {
-            toggle_state.update(cx, |s, cx| {
-                s.auto_shortcuts = !auto_shortcuts;
-                s.save_settings(cx);
-                s.sync_os_bindings();
-            });
-        }));
-
-    let intro = div()
-        .text_size(px(11.))
-        .text_color(colors::text_secondary())
-        .child(SharedString::from(
-            "Dicto can register its global shortcuts with the desktop itself, \
-             so they work from anywhere — no manual setup.",
-        ));
-
-    let mut section = v_flex().gap(px(4.)).child(intro).child(auto_row);
-
-    match crate::hotkey::os_binding::status() {
-        None => {
-            section = section.child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(colors::text_secondary())
-                    .child(SharedString::from("Setting up shortcuts…")),
-            );
-        }
-        Some(status) => {
-            let mode_line = match status.mode {
-                crate::hotkey::os_binding::OsBindingMode::Off => "Off".to_string(),
-                crate::hotkey::os_binding::OsBindingMode::PortalManaged => {
-                    "Managed by the desktop portal".to_string()
-                }
-                crate::hotkey::os_binding::OsBindingMode::NativeRegistration => {
-                    "Registered with the window system".to_string()
-                }
-                crate::hotkey::os_binding::OsBindingMode::GnomeKeybindings => {
-                    "Set in GNOME custom shortcuts".to_string()
-                }
-                crate::hotkey::os_binding::OsBindingMode::ManualRequired => {
-                    "Manual setup required".to_string()
-                }
-            };
-            let mut text = format!("System shortcuts: {mode_line}");
-            for action in &status.actions {
-                text.push('\n');
-                text.push_str(action);
-            }
-            if !status.detail.is_empty() {
-                text.push('\n');
-                text.push_str(&status.detail);
-            }
-
-            section = section.child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(colors::text_secondary())
-                    .child(SharedString::from(text)),
-            );
-
-            if let Some(snippet) = status.snippet {
-                section = section.child(
-                    div()
-                        .mt(px(6.))
-                        .p(px(8.))
-                        .rounded(px(4.))
-                        .bg(colors::bg())
-                        .border_1()
-                        .border_color(colors::border())
-                        .text_size(px(10.))
-                        .text_color(colors::text())
-                        .child(SharedString::from(snippet)),
-                );
-            }
-        }
-    }
-
-    section.into_any_element()
-}
-
 fn section_title(text: &str) -> gpui::AnyElement {
     div()
         .mt(px(12.))
@@ -519,7 +323,7 @@ fn section_title(text: &str) -> gpui::AnyElement {
         .into_any_element()
 }
 
-fn divider() -> gpui::AnyElement {
+pub(crate) fn divider() -> gpui::AnyElement {
     div().h(px(1.)).bg(colors::border()).into_any_element()
 }
 
@@ -804,7 +608,7 @@ fn run_tts_test(state: Entity<DictState>, cx: &mut gpui::App) {
     .detach();
 }
 
-fn toggle_switch(
+pub(crate) fn toggle_switch(
     id: &'static str,
     on: bool,
     on_click: impl Fn(&mut gpui::App) + 'static,

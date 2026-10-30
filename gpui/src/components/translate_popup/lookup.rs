@@ -131,10 +131,10 @@ fn enable_row(state: Entity<DictState>) -> gpui::AnyElement {
         .child(SharedString::from("Enable Word Lookup"))
         .on_click(move |_ev, _window, cx| {
             let state = state.clone();
-            cx.update_entity(&state, |s, cx| {
-                s.word_lookup.enabled = true;
-                s.save_settings(cx);
-                s.reload_hotkey(cx);
+            // Register the hotkey off the UI thread; the portal backend can
+            // block for a few seconds on its first bind.
+            crate::components::word_lookup_panel::set_word_lookup_enabled(state.clone(), true, cx);
+            state.update(cx, |s, cx| {
                 if let Some(wl) = s.word_lookup_engine.as_mut() {
                     wl.hide_popup();
                 }
