@@ -1,6 +1,21 @@
 # Makefile for building Windows .exe from Linux
 
-.PHONY: windows clean-patches icon build clean help
+.PHONY: windows clean-patches icon build clean help dev-install dev-uninstall
+
+# Local development install prefix and build profile.
+#   make dev-install                 # release build -> ~/.local
+#   make dev-install PROFILE=debug   # debug build
+#   make dev-install PREFIX=/usr/local  # system-wide (needs write perms)
+PREFIX ?= $(HOME)/.local
+PROFILE ?= release
+
+ifeq ($(PROFILE),release)
+CARGO_FLAGS := --release
+DEV_BIN := target/release/dicto
+else
+CARGO_FLAGS :=
+DEV_BIN := target/debug/dicto
+endif
 
 # Default target
 windows: patch-gpui icon build
@@ -38,6 +53,30 @@ build:
 	@cargo clean -p dicto --target x86_64-pc-windows-msvc
 	@cargo xwin build --target x86_64-pc-windows-msvc -p dicto
 
+# Build the current tree and install it for the local user (or PREFIX).
+dev-install:
+	@echo "Building dicto ($(PROFILE))..."
+	@cargo build -p dicto $(CARGO_FLAGS)
+	@echo "Installing to $(PREFIX)..."
+	@install -Dm755 $(DEV_BIN) $(PREFIX)/bin/dicto
+	@install -Dm644 assets/icon.svg $(PREFIX)/share/icons/hicolor/scalable/apps/dicto.svg
+	@mkdir -p $(PREFIX)/share/applications
+	@sed 's|^Exec=.*|Exec=$(PREFIX)/bin/dicto|' packaging/arch/dicto.desktop \
+		> $(PREFIX)/share/applications/dicto.desktop
+	@chmod 644 $(PREFIX)/share/applications/dicto.desktop
+	@-update-desktop-database $(PREFIX)/share/applications 2>/dev/null || true
+	@-gtk-update-icon-cache -qtf $(PREFIX)/share/icons/hicolor 2>/dev/null || true
+	@echo "Installed: $(PREFIX)/bin/dicto"
+	@echo "Run 'dicto' or launch 'Dicto' from your app menu."
+
+# Remove the development install (does not touch build artifacts).
+dev-uninstall:
+	@rm -f $(PREFIX)/bin/dicto \
+		$(PREFIX)/share/applications/dicto.desktop \
+		$(PREFIX)/share/icons/hicolor/scalable/apps/dicto.svg
+	@-update-desktop-database $(PREFIX)/share/applications 2>/dev/null || true
+	@echo "Removed dicto from $(PREFIX)"
+
 # Clean build artifacts
 clean:
 	@echo "Cleaning..."
@@ -60,6 +99,8 @@ help:
 	@echo "  make build        - Build .exe (requires patches and icon)"
 	@echo "  make clean        - Clean Windows build artifacts"
 	@echo "  make reset-patches- Reset gpui patches (use after cargo update)"
+	@echo "  make dev-install  - Build locally and install to ~/.local (PREFIX, PROFILE=debug)"
+	@echo "  make dev-uninstall- Remove the local development install"
 	@echo "  make help         - Show this help"
 	@echo ""
 	@echo "Example workflow:"

@@ -23,8 +23,44 @@
 | File | Description |
 | ---- | ----------- |
 | `dicto-*-x86_64-unknown-linux-gnu.tar.gz` | Generic Linux binary |
+| `dicto_*_amd64.deb` | Debian / Ubuntu package |
 
 Extract the archive and run the binary.
+
+### Debian / Ubuntu (APT repository)
+
+Install and update via `apt`:
+
+```bash
+# 1. Add the repository signing key
+sudo mkdir -p /etc/apt/keyrings
+curl -fsSL https://logi-camp.github.io/dicto/dicto-archive-keyring.gpg | \
+  sudo tee /etc/apt/keyrings/dicto-archive-keyring.gpg > /dev/null
+
+# 2. Add the repository
+echo "deb [signed-by=/etc/apt/keyrings/dicto-archive-keyring.gpg] https://logi-camp.github.io/dicto stable main" | \
+  sudo tee /etc/apt/sources.list.d/dicto.list
+
+# 3. Install
+sudo apt update
+sudo apt install dicto
+```
+
+Updates arrive with the usual `sudo apt update && sudo apt upgrade`.
+
+Alternatively, download `dicto_*_amd64.deb` from
+[Releases](https://github.com/logi-camp/dicto/releases/latest) and run
+`sudo apt install ./dicto_*_amd64.deb`.
+
+The package declares its runtime dependencies (`gtk3`, `alsa`, `xkbcommon`,
+`zlib`) and a verified minimum `libc6` version derived from the shipped
+binary, so `apt` refuses to install on systems where the binary would not
+run instead of failing at launch. To build the `.deb` locally:
+
+```bash
+cargo build --release --package dicto
+packaging/debian/build-deb.sh <version> target/release/dicto dist amd64
+```
 
 ### Arch Linux (AUR)
 

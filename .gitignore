@@ -24,3 +24,4 @@ tmp_*.png
 
 # Linux Packaging
 /pkg
+dist/

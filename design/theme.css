@@ -1,0 +1,20 @@
+/* Dicto Quick Translate — design tokens (Tokyo Night-inspired, matches gpui/src/colors.rs)
+   Declared as Tailwind v4 theme variables: each --color-* becomes a utility
+   (bg-surface, text-muted, border-line, …). */
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #0f1117;
+  --color-surface: #1a1d27;
+  --color-elevated: #222634;
+  --color-hover: #2a2f3e;
+  --color-primary: #7aa2f7;
+  --color-ink: #c0caf5;          /* primary text */
+  --color-muted: #565f89;        /* secondary text */
+  --color-line: #292e42;         /* borders/dividers */
+  --color-danger: #e05050;
+  --color-warn: #e09050;
+  --color-ok: #50c878;
+
+  --font-sans: 'Inter', system-ui, sans-serif;
+}

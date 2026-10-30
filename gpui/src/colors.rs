@@ -8,6 +8,16 @@ pub fn surface() -> Hsla {
     gpui::rgb(0x1a1d27).into()
 }
 
+/// Slightly lighter than `surface` — used for nested controls (buttons, inputs).
+pub fn surface_alt() -> Hsla {
+    gpui::rgb(0x222634).into()
+}
+
+/// Hover background for interactive elements.
+pub fn hover() -> Hsla {
+    gpui::rgb(0x2a2f3e).into()
+}
+
 pub fn primary() -> Hsla {
     gpui::rgb(0x7aa2f7).into()
 }

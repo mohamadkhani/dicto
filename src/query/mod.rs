@@ -20,6 +20,13 @@ pub fn search_suggestions(prefix: &str, limit: usize) -> Vec<String> {
     registry::suggestions(prefix, limit)
 }
 
+/// Fuzzy near-matches for `word` across all enabled dictionaries,
+/// deduplicated, excluding the word itself. Backs the popup's horizontal
+/// "related words" row.
+pub fn related_words(word: &str, limit: usize) -> Vec<String> {
+    registry::related_words(word, limit)
+}
+
 /// Look up a binary resource (image, audio, etc.) across all enabled dictionaries.
 pub fn lookup_resource(path: &str) -> Option<Vec<u8>> {
     registry::lookup_resource(path)

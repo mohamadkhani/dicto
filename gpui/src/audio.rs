@@ -1,5 +1,16 @@
 //! Background audio playback for MDD pronunciation clips.
 //!
+//! All clips play on ONE dedicated thread that serializes every playback.
+//! This is deliberate: opening streams concurrently from per-click threads
+//! raced the TTS controllers' streams on some ALSA setups and silently
+//! dropped clips — the "sometimes it plays" bug.
+//!
+//! Each clip opens a FRESH output stream, plays to the end, and drops it —
+//! the same open/play/drop lifecycle as the TTS path. On ALSA with
+//! sound-server routing a long-lived stream goes stale when the device
+//! topology shifts (append succeeds but stays silent), so nothing is kept
+//! open between clips.
+//!
 //! First we try to feed the raw bytes straight into rodio (works for
 //! mp3/wav/ogg-vorbis/flac). For codecs rodio can't actually decode —
 //! notably Speex (`.spx`) — we transcode via `ffmpeg` to a cached WAV
@@ -11,29 +22,64 @@ use std::hash::{Hash, Hasher};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::LazyLock;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
-use tracing::{info, warn};
+use tracing::{debug, warn};
+
+/// Commands for the dedicated clip-audio thread.
+enum ClipCmd {
+    /// Fetch + play the MDD resource at this path.
+    Play(String),
+}
+
+/// Handle to the dedicated clip-audio thread, created lazily on first
+/// use. The thread owns the rodio stream; `rodio::OutputStream` is
+/// `!Send` on some hosts, which is exactly why the stream lives on one
+/// thread instead of in a static.
+static CLIP_TX: LazyLock<Sender<ClipCmd>> = LazyLock::new(|| {
+    let (tx, rx) = mpsc::channel::<ClipCmd>();
+    thread::Builder::new()
+        .name("dicto-clips".into())
+        .spawn(move || clip_thread(rx))
+        .expect("spawn clip audio thread");
+    tx
+});
 
 /// Look up a resource by path and play it.
 pub fn play_resource(path: &str) {
-    let path = path.to_string();
-    thread::spawn(move || {
-        let bytes = match mdict_rs::query::lookup_resource(&path) {
-            Some(b) => b,
-            None => {
-                warn!("audio: resource not found: {path}");
-                dicto_telemetry::get().track(dicto_telemetry::Event::PronunciationPlaybackFailed {
-                    reason: dicto_telemetry::PlaybackFailureReason::ResourceNotFound,
-                });
-                return;
-            }
-        };
-        play_or_transcode(&path, bytes);
-    });
+    if let Err(e) = CLIP_TX.send(ClipCmd::Play(path.to_string())) {
+        warn!("audio: clip thread gone: {e}");
+    }
 }
 
-fn play_or_transcode(path: &str, bytes: Vec<u8>) {
+/// The clip thread: serializes all playback. The output stream is opened
+/// FRESH for every clip and held until the clip finishes
+/// (`sleep_until_end`), then dropped — the same open/play/drop lifecycle
+/// as the TTS path, the only rodio usage that proved reliable on
+/// ALSA-with-sound-server routing: a long-lived stream goes stale there
+/// when the device topology shifts, and appending to it succeeds but
+/// stays silent. Blocking also serializes rapid clicks: the next queued
+/// clip plays after the current one finishes.
+fn clip_thread(rx: Receiver<ClipCmd>) {
+    while let Ok(ClipCmd::Play(path)) = rx.recv() {
+        debug!(path = %path, "audio: clip command received");
+        let Some(bytes) = mdict_rs::query::lookup_resource(&path) else {
+            warn!("audio: resource not found: {path}");
+            dicto_telemetry::get().track(dicto_telemetry::Event::PronunciationPlaybackFailed {
+                reason: dicto_telemetry::PlaybackFailureReason::ResourceNotFound,
+            });
+            continue;
+        };
+        debug!(path = %path, bytes = bytes.len(), "audio: resource fetched");
+        play_bytes(&path, bytes);
+    }
+}
+
+/// Play raw clip bytes: direct rodio decode when possible, otherwise
+/// transcode via ffmpeg into a cached WAV and play that.
+fn play_bytes(path: &str, bytes: Vec<u8>) {
     let cached = cache_wav_path(path);
 
     if cached.exists() {
@@ -42,7 +88,7 @@ fn play_or_transcode(path: &str, bytes: Vec<u8>) {
     }
 
     // rodio can play these directly; skip ffmpeg.
-    if !needs_transcode(path, &bytes) && try_play_buffer(&bytes) {
+    if !needs_transcode(path, &bytes) && play_direct(&bytes) {
         return;
     }
     // fall through and let ffmpeg have a go
@@ -50,33 +96,14 @@ fn play_or_transcode(path: &str, bytes: Vec<u8>) {
     if !decode_via_ffmpeg(&bytes, &cached) {
         return; // decode_via_ffmpeg already logged the reason
     }
-    info!("audio: cached transcoded clip at {}", cached.display());
+    debug!("audio: cached transcoded clip at {}", cached.display());
     play_file(&cached, path);
 }
 
-fn play_file(cached: &Path, label: &str) {
-    let bytes = match fs::read(cached) {
-        Ok(b) => b,
-        Err(e) => {
-            warn!("audio: reading cached wav failed: {e}");
-            return;
-        }
-    };
-    if !try_play_buffer(&bytes) {
-        warn!(
-            "audio: rodio refused cached wav at {} (clip: {})",
-            cached.display(),
-            label
-        );
-        dicto_telemetry::get().track(dicto_telemetry::Event::PronunciationPlaybackFailed {
-            reason: dicto_telemetry::PlaybackFailureReason::DecoderRejected,
-        });
-    }
-}
-
-/// Try to play a buffer through rodio. Returns false if any step
-/// before playback queued — caller can fall back to ffmpeg.
-fn try_play_buffer(bytes: &[u8]) -> bool {
+/// Decode `bytes` and play them on a fresh output stream, blocking until
+/// the clip finishes. False = device/sink failed or the decoder rejected
+/// the format — the caller falls back to ffmpeg.
+fn play_direct(bytes: &[u8]) -> bool {
     let (_stream, handle) = match rodio::OutputStream::try_default() {
         Ok(pair) => pair,
         Err(e) => {
@@ -88,7 +115,7 @@ fn try_play_buffer(bytes: &[u8]) -> bool {
         }
     };
     let sink = match rodio::Sink::try_new(&handle) {
-        Ok(s) => s,
+        Ok(sink) => sink,
         Err(e) => {
             warn!("audio: sink failed: {e}");
             dicto_telemetry::get().track(dicto_telemetry::Event::PronunciationPlaybackFailed {
@@ -97,18 +124,39 @@ fn try_play_buffer(bytes: &[u8]) -> bool {
             return false;
         }
     };
-    let decoder = match rodio::Decoder::new(Cursor::new(bytes.to_vec())) {
-        Ok(d) => d,
-        Err(_) => {
-            dicto_telemetry::get().track(dicto_telemetry::Event::PronunciationPlaybackFailed {
-                reason: dicto_telemetry::PlaybackFailureReason::DecoderRejected,
-            });
-            return false;
-        }
+    let Ok(decoder) = rodio::Decoder::new(Cursor::new(bytes.to_vec())) else {
+        warn!("audio: decoder rejected clip");
+        dicto_telemetry::get().track(dicto_telemetry::Event::PronunciationPlaybackFailed {
+            reason: dicto_telemetry::PlaybackFailureReason::DecoderRejected,
+        });
+        return false;
     };
     sink.append(decoder);
+    // Holding the stream until the clip ends is what keeps it audible —
+    // `_stream` must outlive playback.
     sink.sleep_until_end();
+    debug!("audio: clip finished");
     true
+}
+
+fn play_file(cached: &Path, label: &str) {
+    let bytes = match fs::read(cached) {
+        Ok(b) => b,
+        Err(e) => {
+            warn!("audio: reading cached wav failed: {e}");
+            return;
+        }
+    };
+    if !play_direct(&bytes) {
+        warn!(
+            "audio: rodio refused cached wav at {} (clip: {})",
+            cached.display(),
+            label
+        );
+        dicto_telemetry::get().track(dicto_telemetry::Event::PronunciationPlaybackFailed {
+            reason: dicto_telemetry::PlaybackFailureReason::DecoderRejected,
+        });
+    }
 }
 
 /// Heuristic: codecs rodio's symphonia stack can't decode.

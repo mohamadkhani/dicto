@@ -12,6 +12,7 @@ project. Start with [architecture.md](architecture.md) for the
 | [mdict-format.md](mdict-format.md) | MDX/MDD on-disk layout, the parser's interpretation, FST index build, the query pipeline (including `@@@LINK=` redirects). |
 | [rendering.md](rendering.md) | HTML → GPUI element pipeline: tokenizer, CSS subset, grouped link chips, separate text/background dark-theme remap, image extraction, audio playback, and rendering gotchas. |
 | [settings.md](settings.md) | Per-dictionary configuration: enable/disable, reorder, hot reload, where settings live on disk. |
+| [quick-translate.md](quick-translate.md) | Selection-translation popup: trigger flow (hotkey/tray), popup states, the two independent playback slots, seek bar, TTS, and the platform backends. |
 | [telemetry.md](telemetry.md) | Privacy-first opt-in analytics: consent flow, the full event schema (with fire points), the privacy model, and how to add a new event. |
 
 ## External-library references (don't edit unless GPUI/gpui-component changes)

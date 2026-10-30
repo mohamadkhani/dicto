@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::{LazyLock, RwLock};
 
 pub use css::Stylesheet;
-pub use parser::{Block, parse_with_styles};
+pub use parser::{Block, first_sound_path, parse_with_styles};
 pub use render::render_blocks;
 
 /// Per-dictionary stylesheets, keyed by dictionary name (file stem).

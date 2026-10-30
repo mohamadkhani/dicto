@@ -9,3 +9,4 @@ Terminal=false
 Categories=Education;Office;Dictionary;
 Keywords=dictionary;mdx;mdict;lookup;words;
 StartupNotify=true
+StartupWMClass=dicto
