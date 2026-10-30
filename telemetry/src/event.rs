@@ -168,26 +168,22 @@ impl SettingsSource {
 /// A tab in the settings dialog. Compile-time-checked so a tab rename
 /// surfaces at the call site rather than silently dropping the event.
 pub enum SettingsTab {
+    General,
     Dictionaries,
     Import,
     Download,
-    WordLookup,
     QuickTranslate,
-    Shortcuts,
-    Telemetry,
     About,
 }
 
 impl SettingsTab {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::General => "general",
             Self::Dictionaries => "dictionaries",
             Self::Import => "import",
             Self::Download => "download",
-            Self::WordLookup => "word_lookup",
             Self::QuickTranslate => "quick_translate",
-            Self::Shortcuts => "shortcuts",
-            Self::Telemetry => "telemetry",
             Self::About => "about",
         }
     }

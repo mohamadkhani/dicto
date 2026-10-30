@@ -9,7 +9,7 @@
 //! - **Don't Allow** → persists `OptedOut`.
 //! - **close/X** → treated as `OptedOut` (implicit, respectful "not now, and
 //!   don't ask again"). The user can still flip it on later via the
-//!   Settings → Telemetry tab.
+//!   Settings → General tab.
 //!
 //! Closing → `OptedOut` means the dialog never nags: it appears at most once
 //! per installation, on the first launch where consent is undecided.
@@ -135,8 +135,9 @@ pub fn open_consent_dialog(window: &mut Window, cx: &mut gpui::App) {
 /// so the choice takes effect immediately in the current process — opt-in
 /// starts an `AptabaseClient` and events begin flowing without a restart;
 /// opt-out swaps in `NullTelemetry` and pending events stop. Either way the
-/// persisted decision is also picked up on next launch.
-fn set_consent(consent: mdict_rs::settings::TelemetryConsent, _cx: &mut gpui::App) {
+/// persisted decision is also picked up on next launch. Also used by the
+/// General settings tab's Allow / Don't Allow buttons.
+pub(crate) fn set_consent(consent: mdict_rs::settings::TelemetryConsent, _cx: &mut gpui::App) {
     if let Err(e) = mdict_rs::settings::update_consent(consent) {
         tracing::warn!("telemetry: failed to persist consent: {e}");
         return;

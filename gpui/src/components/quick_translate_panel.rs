@@ -25,7 +25,6 @@ pub fn quick_translate_tab_content(
     cx: &mut gpui::App,
 ) -> gpui::AnyElement {
     let settings = state.read(cx).quick_translate.clone();
-    let backend = state.read(cx).hotkey_backend.clone();
 
     // Lazily create persistent InputState entities for each editable field on
     // first render, seeded from loaded settings. They persist on DictState so
@@ -51,73 +50,6 @@ pub fn quick_translate_tab_content(
                     "Translate selected text anywhere on your screen with a global hotkey.",
                 )),
         );
-
-    // Enable toggle
-    let toggle_state = state.clone();
-    let enabled = settings.enabled;
-    let enable_row = h_flex()
-        .justify_between()
-        .items_center()
-        .py(px(10.))
-        .child(
-            div()
-                .text_size(px(13.))
-                .text_color(colors::text())
-                .child(SharedString::from("Enable Quick Translate")),
-        )
-        .child(toggle_switch("qt-enable", enabled, move |cx| {
-            toggle_state.update(cx, |s, cx| {
-                s.quick_translate.enabled = !enabled;
-                s.save_settings(cx);
-                s.reload_hotkey(cx);
-            });
-        }));
-
-    // Hotkey display
-    let hotkey_value = settings.hotkey.clone();
-    let hotkey_row = h_flex()
-        .items_center()
-        .py(px(8.))
-        .gap(px(12.))
-        .child(
-            div()
-                .w(px(120.))
-                .text_size(px(12.))
-                .text_color(colors::text_secondary())
-                .child(SharedString::from("Global Hotkey")),
-        )
-        .child(
-            div()
-                .px(px(10.))
-                .py(px(5.))
-                .rounded(px(4.))
-                .bg(colors::bg())
-                .border_1()
-                .border_color(colors::border())
-                .text_size(px(12.))
-                .text_color(colors::text())
-                .child(SharedString::from(hotkey_value)),
-        );
-
-    // Backend note
-    let backend_note = if settings.enabled {
-        Some(
-            div()
-                .text_size(px(11.))
-                .text_color(colors::text_secondary())
-                .child(SharedString::from(format!(
-                    "Hotkey backend: {}",
-                    match backend.as_str() {
-                        "x11" => "X11 (fully supported)",
-                        "windows" => "Windows (fully supported)",
-                        "tray_menu" => "Tray menu only — use the tray icon to translate",
-                        other => other,
-                    }
-                ))),
-        )
-    } else {
-        None
-    };
 
     // API key input
     let api_key_row = input_row(
@@ -268,11 +200,6 @@ pub fn quick_translate_tab_content(
         .overflow_y_scrollbar();
     body = body.child(header);
     body = body.child(divider());
-    body = body.child(enable_row);
-    body = body.child(hotkey_row);
-    if let Some(note) = backend_note {
-        body = body.child(note);
-    }
     body = body.child(divider());
     body = body.child(section_title("Translation"));
     body = body.child(base_url_row);

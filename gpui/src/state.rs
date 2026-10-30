@@ -84,10 +84,14 @@ pub struct DictState {
     /// Files being imported via the init/settings modal.
     pub import_files: Vec<ImportFile>,
 
-    /// Active tab in the settings dialog: 0 = Dictionaries, 1 = Import,
-    /// 2 = Download, 3 = Word Lookup, 4 = Quick Translate, 5 = Shortcuts,
-    /// 6 = Telemetry, 7 = About.
+    /// Active tab in the settings dialog: 0 = General, 1 = Dictionaries,
+    /// 2 = Import, 3 = Download, 4 = Quick Translate, 5 = About (see the
+    /// `TAB_*` constants in `components::settings_window`).
     pub settings_active_tab: usize,
+
+    /// Telemetry Details panel expanded in the General tab (click-activated;
+    /// no popover component exists in gpui_component).
+    pub telemetry_details_open: bool,
 
     pub catalog: CatalogState,
     pub download_status: DictDownloadStatus,
@@ -277,6 +281,7 @@ impl DictState {
             show_import_modal: mdict_rs::config::discover_mdx_files().is_empty(),
             import_files: Vec::new(),
             settings_active_tab: 0,
+            telemetry_details_open: false,
             catalog: CatalogState::Idle,
             download_status: DictDownloadStatus::Idle,
             download_active_id: None,

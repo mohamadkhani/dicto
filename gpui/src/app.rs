@@ -899,9 +899,9 @@ fn ai_setup_banner(state: &Entity<DictState>, cx: &Context<DictApp>) -> gpui::An
                         .child("Configure")
                         .on_click(cx.listener(move |_this, _ev, window, cx| {
                             cx.update_entity(&configure_state, |s, cx| {
-                                // Quick Translate tab (0 Dictionaries, 1 Import,
-                                // 2 Download, 3 Word Lookup, 4 Quick Translate).
-                                s.settings_active_tab = 4;
+                                // Quick Translate advanced settings.
+                                s.settings_active_tab =
+                                    crate::components::settings_window::TAB_QUICK_TRANSLATE;
                                 cx.notify();
                             });
                             open_settings_dialog(configure_state.clone(), window, cx);
@@ -1014,9 +1014,9 @@ fn word_lookup_banner(state: &Entity<DictState>, cx: &Context<DictApp>) -> gpui:
                         .child("Settings")
                         .on_click(cx.listener(move |_this, _ev, window, cx| {
                             cx.update_entity(&settings_state, |s, cx| {
-                                // Word Lookup tab (0 Dictionaries, 1 Import,
-                                // 2 Download, 3 Word Lookup).
-                                s.settings_active_tab = 3;
+                                // Word Lookup settings live in the General tab.
+                                s.settings_active_tab =
+                                    crate::components::settings_window::TAB_GENERAL;
                                 cx.notify();
                             });
                             open_settings_dialog(settings_state.clone(), window, cx);
@@ -1236,7 +1236,7 @@ fn open_settings_dialog(state: Entity<DictState>, window: &mut Window, cx: &mut 
 
         dialog
             .title(div().child("Settings"))
-            // Wide enough for all eight tabs; the Dialog default (448px)
+            // Wide enough for all six tabs; the Dialog default (448px)
             // clips the tab bar. `.w_full()` does not change the card width.
             .w(px(720.))
             .h(px(560.))
@@ -1259,12 +1259,21 @@ fn open_settings_dialog(state: Entity<DictState>, window: &mut Window, cx: &mut 
                             active_tab,
                             cx,
                         ))
-                        .child(if active_tab == 0 {
+                        .child(if active_tab
+                            == crate::components::settings_window::TAB_GENERAL
+                        {
+                            crate::components::general_panel::general_tab_content(
+                                state.clone(),
+                                cx,
+                            )
+                        } else if active_tab
+                            == crate::components::settings_window::TAB_DICTIONARIES
+                        {
                             crate::components::settings_panel::dictionaries_tab_content(
                                 state.clone(),
                                 cx,
                             )
-                        } else if active_tab == 1 {
+                        } else if active_tab == crate::components::settings_window::TAB_IMPORT {
                             let is_importing = state.read(cx).import_files.iter().any(|f| {
                                 matches!(
                                     f.status,
@@ -1277,34 +1286,21 @@ fn open_settings_dialog(state: Entity<DictState>, window: &mut Window, cx: &mut 
                                 is_importing,
                                 cx,
                             )
-                        } else if active_tab == 2 {
+                        } else if active_tab == crate::components::settings_window::TAB_DOWNLOAD {
                             crate::components::download_panel::download_tab_content(
                                 state.clone(),
                                 window,
                                 cx,
                             )
-                        } else if active_tab == 3 {
-                            crate::components::word_lookup_panel::word_lookup_tab_content(
-                                state.clone(),
-                                cx,
-                            )
-                        } else if active_tab == 4 {
+                        } else if active_tab
+                            == crate::components::settings_window::TAB_QUICK_TRANSLATE
+                        {
                             crate::components::quick_translate_panel::quick_translate_tab_content(
                                 state.clone(),
                                 window,
                                 cx,
                             )
-                        } else if active_tab == 5 {
-                            crate::components::shortcuts_panel::shortcuts_tab_content(
-                                state.clone(),
-                                cx,
-                            )
-                        } else if active_tab == 6 {
-                            crate::components::settings_panel::telemetry_tab_content(
-                                state.clone(),
-                                cx,
-                            )
-                        } else if active_tab == 7 {
+                        } else if active_tab == crate::components::settings_window::TAB_ABOUT {
                             crate::components::about_panel::panel_content()
                         } else {
                             let is_importing = state.read(cx).import_files.iter().any(|f| {
