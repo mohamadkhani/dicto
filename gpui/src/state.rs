@@ -89,10 +89,6 @@ pub struct DictState {
     /// `TAB_*` constants in `components::settings_window`).
     pub settings_active_tab: usize,
 
-    /// Telemetry Details panel expanded in the General tab (click-activated;
-    /// no popover component exists in gpui_component).
-    pub telemetry_details_open: bool,
-
     pub catalog: CatalogState,
     pub download_status: DictDownloadStatus,
     pub download_active_id: Option<String>,
@@ -281,7 +277,6 @@ impl DictState {
             show_import_modal: mdict_rs::config::discover_mdx_files().is_empty(),
             import_files: Vec::new(),
             settings_active_tab: 0,
-            telemetry_details_open: false,
             catalog: CatalogState::Idle,
             download_status: DictDownloadStatus::Idle,
             download_active_id: None,

@@ -195,7 +195,10 @@ pub fn quick_translate_tab_content(
         .gap(px(4.))
         .w_full()
         .h_full()
+        // Same right padding as the General tab: the scrollbar thumb lives in
+        // the wrapper's right 16px and would sit on the toggles.
         .p(px(4.))
+        .pr(px(16.))
         .id("qt-settings-scroll")
         .overflow_y_scrollbar();
     body = body.child(header);
