@@ -106,6 +106,35 @@ pub fn take_ipc_activation_token() -> Option<String> {
         .and_then(|mut g| g.take())
 }
 
+/// Global flag set by the `dicto-main.sock` "show" IPC trigger: a second
+/// plain launch asks this instance to show + raise the dictionary window.
+static IPC_SHOW_TRIGGERED: AtomicBool = AtomicBool::new(false);
+
+/// Activation token forwarded by the "show" IPC client. Separate slot from
+/// `IPC_ACTIVATION_TOKEN` so a window activation can never clobber the
+/// translate/lookup popup's token (and vice versa).
+static IPC_SHOW_TOKEN: std::sync::OnceLock<std::sync::Mutex<Option<String>>> =
+    std::sync::OnceLock::new();
+
+/// Stash the activation token sent by the "show" IPC client.
+fn set_ipc_show_token(token: Option<String>) {
+    if let Ok(mut g) = IPC_SHOW_TOKEN
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+    {
+        *g = token;
+    }
+}
+
+/// Take the stashed "show" token (last writer wins, one-shot).
+fn take_ipc_show_token() -> Option<String> {
+    IPC_SHOW_TOKEN
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .ok()
+        .and_then(|mut g| g.take())
+}
+
 /// The dictionary (main) window. Tray "Show Dictionary" raises+focuses THIS
 /// window (raising whatever window happens to exist would hand keyboard
 /// focus to a popup) and reopens it after the user closes it — the app
@@ -123,11 +152,13 @@ fn ipc_socket_path(name: &str) -> std::path::PathBuf {
 }
 
 /// Send a trigger to the running instance via the named IPC socket.
-/// Returns a human-readable error when no live instance is listening —
-/// including the stale-socket case (a previous instance died and left the
-/// socket file behind; connecting to it fails with ECONNREFUSED).
+/// `trigger` is the first line ("trigger" for the translate/lookup popups,
+/// "show" for the main-window activation socket). Returns a human-readable
+/// error when no live instance is listening — including the stale-socket
+/// case (a previous instance died and left the socket file behind;
+/// connecting to it fails with ECONNREFUSED).
 #[cfg(target_os = "linux")]
-fn send_ipc_trigger(socket_name: &str) -> Result<(), String> {
+fn send_ipc_trigger(socket_name: &str, trigger: &str) -> Result<(), String> {
     use std::io::Write;
     use std::os::unix::net::UnixStream;
 
@@ -138,7 +169,7 @@ fn send_ipc_trigger(socket_name: &str) -> Result<(), String> {
             // activation token from our environment — present when GNOME
             // launched us from a keyboard shortcut. Old servers ignore the
             // extra line; new servers use it to raise the popup reliably.
-            let mut msg = String::from("trigger\n");
+            let mut msg = format!("{trigger}\n");
             if let Ok(token) = std::env::var("XDG_ACTIVATION_TOKEN")
                 && !token.is_empty()
             {
@@ -157,13 +188,64 @@ fn send_ipc_trigger(socket_name: &str) -> Result<(), String> {
     }
 }
 
+/// Connect-only probe: `true` when a live instance is listening on the named
+/// IPC socket. Writes nothing, so the server never treats it as a trigger.
+#[cfg(target_os = "linux")]
+fn ipc_instance_running(socket_name: &str) -> bool {
+    use std::os::unix::net::UnixStream;
+
+    UnixStream::connect(ipc_socket_path(socket_name)).is_ok()
+}
+
+/// Win32 single-instance guard: creates a named mutex kept owned for the
+/// process lifetime. Returns `true` when another instance already owns it.
+#[cfg(target_os = "windows")]
+fn win32_already_running() -> bool {
+    use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+    use windows::Win32::System::Threading::CreateMutexW;
+    use windows::core::w;
+
+    let mutex = unsafe { CreateMutexW(None, false, w!("Local\\Dicto")) };
+    // Must be read immediately — any later Win32 call overwrites it.
+    let already = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
+    match mutex {
+        // Leaking the handle keeps the mutex owned; a closed handle would
+        // release it and let a third instance in.
+        Ok(handle) => std::mem::forget(handle),
+        Err(e) => tracing::warn!("single-instance mutex: {e}"),
+    }
+    already
+}
+
+/// Best-effort raise of the already-running instance's main window (second
+/// plain launch on Windows). Finds the window by its "Dicto" title and
+/// restores + focuses it. Limitation: a different app's window titled
+/// "Dicto" would match instead; nothing better is available cross-process
+/// without extra plumbing (a hidden broadcast window).
+#[cfg(target_os = "windows")]
+fn show_existing_window() {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE,
+    };
+    use windows::core::{PCWSTR, w};
+
+    unsafe {
+        if let Ok(hwnd) = FindWindowW(PCWSTR::null(), w!("Dicto")) {
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+            let _ = SetForegroundWindow(hwnd);
+        }
+    }
+}
+
 /// Spawn an IPC server that listens for trigger messages on the named
 /// socket and sets the given global flag on each one. Runs in a background
-/// thread; the poll loop in app.rs drains the flag.
+/// thread; the poll loop drains the flag. `stash_token` receives the
+/// activation token forwarded on line 2 (when present).
 #[cfg(target_os = "linux")]
 fn spawn_ipc_server(
     socket_name: &'static str,
     flag: &'static AtomicBool,
+    stash_token: fn(Option<String>),
     thread_name: &'static str,
 ) {
     use std::os::unix::net::UnixListener;
@@ -198,7 +280,7 @@ fn spawn_ipc_server(
                         .map(str::to_string)
                         && !token.is_empty()
                     {
-                        set_ipc_activation_token(Some(token));
+                        stash_token(Some(token));
                     }
                     flag.store(true, Ordering::Release);
                 }
@@ -270,7 +352,7 @@ fn main() {
     if let Some((socket, label)) = trigger_flag {
         #[cfg(target_os = "linux")]
         {
-            match send_ipc_trigger(socket) {
+            match send_ipc_trigger(socket, "trigger") {
                 Ok(()) => std::process::exit(0),
                 Err(e) => {
                     eprintln!(
@@ -289,6 +371,43 @@ fn main() {
             std::process::exit(1);
         }
     }
+
+    // Start hidden in the tray (no dictionary window) when `--tray` is set —
+    // the autostart entry uses this. First-run surfaces still win: the setup
+    // guard below ignores the flag.
+    let tray_requested = std::env::args().any(|a| a == "--tray");
+
+    // Single-instance guard: a second full launch must NOT steal the IPC
+    // sockets (and with them the global hotkeys) from the running instance.
+    #[cfg(target_os = "linux")]
+    {
+        if tray_requested {
+            // A second `--tray` launch (autostart racing a live session):
+            // signal nothing, exit silently.
+            if ipc_instance_running("dicto-main.sock") {
+                std::process::exit(0);
+            }
+        } else {
+            // A second plain launch shows + raises the running instance's
+            // dictionary window, then exits. Falls through on error (no
+            // instance, or a stale socket file) — this process becomes the
+            // main instance and `spawn_ipc_server` clears the stale file.
+            if send_ipc_trigger("dicto-main.sock", "show").is_ok() {
+                std::process::exit(0);
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if win32_already_running() {
+            if !tray_requested {
+                show_existing_window();
+            }
+            std::process::exit(0);
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    let _ = tray_requested;
 
 
     #[cfg(target_os = "linux")]
@@ -360,18 +479,27 @@ fn main() {
 
             // Start the IPC servers so `dicto --translate` / `dicto --lookup`
             // (e.g. from a GNOME custom keyboard shortcut) can trigger the
-            // popups in the running instance.
+            // popups in the running instance, and a second plain launch can
+            // ask us to show + raise the dictionary window.
             #[cfg(target_os = "linux")]
             {
                 spawn_ipc_server(
                     "dicto-translate.sock",
                     &TRAY_TRANSLATE_TRIGGERED,
+                    set_ipc_activation_token,
                     "dicto-ipc-translate",
                 );
                 spawn_ipc_server(
                     "dicto-lookup.sock",
                     &TRAY_LOOKUP_TRIGGERED,
+                    set_ipc_activation_token,
                     "dicto-ipc-lookup",
+                );
+                spawn_ipc_server(
+                    "dicto-main.sock",
+                    &IPC_SHOW_TRIGGERED,
+                    set_ipc_show_token,
+                    "dicto-ipc-main",
                 );
             }
 
@@ -388,8 +516,12 @@ fn main() {
         });
 }
 
-/// Poll the tray action channel from a GPUI background task.
+/// Poll the tray action channel from a GPUI background task. Also drains the
+/// `dicto-main.sock` "show" IPC flag: a second plain launch asks this
+/// instance to raise the dictionary window.
 ///
+/// - IPC "show" → raise + focus (or reopen) the dictionary window with the
+///   activation token the second launch forwarded.
 /// - `Show` → raise + focus (or reopen) the dictionary window with the
 ///   tray's xdg-activation token.
 /// - `QuickTranslate` → set the same flag the `dicto --translate` IPC path
@@ -404,6 +536,14 @@ fn poll_tray_actions(
 ) {
     cx.spawn(async move |cx| {
         loop {
+            // A second plain launch asked us to show + raise the dictionary
+            // window ("show" trigger on dicto-main.sock).
+            if IPC_SHOW_TRIGGERED.swap(false, Ordering::Acquire) {
+                let token = take_ipc_show_token();
+                cx.update(|cx| {
+                    raise_dictionary_window(token, cx);
+                });
+            }
             while let Ok(action) = tray_rx.try_recv() {
                 match action {
                     TrayAction::Show { token } => {
