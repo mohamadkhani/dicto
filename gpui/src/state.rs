@@ -369,7 +369,11 @@ impl DictState {
             engine.update_settings(settings);
             self.hotkey_backend = engine.backend_name().to_string();
         } else if settings.enabled {
-            let engine = QuickTranslateEngine::new(settings);
+            // `new` no longer registers; this rarely-hit branch (engine
+            // absent) registers inline. Post-startup the portal handle is
+            // settled, so this is fast.
+            let mut engine = QuickTranslateEngine::new(settings.clone());
+            engine.set_hotkey_manager(crate::quick_translate::make_hotkey_manager(settings));
             self.hotkey_backend = engine.backend_name().to_string();
             self.quick_translate_engine = Some(engine);
         }
@@ -380,7 +384,10 @@ impl DictState {
         if let Some(engine) = self.word_lookup_engine.as_mut() {
             engine.update_settings(wl_settings);
         } else {
-            self.word_lookup_engine = Some(WordLookupEngine::new(wl_settings));
+            // See the QT branch above: `new` no longer registers.
+            let mut engine = WordLookupEngine::new(wl_settings.clone());
+            engine.set_hotkey_manager(crate::word_lookup::make_hotkey_manager(wl_settings));
+            self.word_lookup_engine = Some(engine);
         }
 
         // Keep the OS-level shortcuts in step with the new settings.
@@ -394,7 +401,11 @@ impl DictState {
         if let Some(engine) = self.quick_translate_engine.as_mut() {
             engine.update_settings(settings);
         } else if settings.enabled {
-            self.quick_translate_engine = Some(QuickTranslateEngine::new(settings));
+            // `new` no longer registers; this rarely-hit branch (engine
+            // absent) registers inline (fast post-startup, see reload_hotkey).
+            let mut engine = QuickTranslateEngine::new(settings.clone());
+            engine.set_hotkey_manager(crate::quick_translate::make_hotkey_manager(settings));
+            self.quick_translate_engine = Some(engine);
         }
     }
 

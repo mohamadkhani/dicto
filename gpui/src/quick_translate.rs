@@ -46,26 +46,26 @@ pub struct QuickTranslateEngine {
 
 impl QuickTranslateEngine {
     /// Create a new engine with the given settings.
+    ///
+    /// Does NOT register the hotkey: the XDG portal backend blocks up to a
+    /// few seconds for its first bind (see [`make_hotkey_manager`]), and
+    /// construction runs on the UI thread (inside `DictState::new`), where
+    /// that block delayed the first frame. Build the manager off the UI
+    /// thread with [`make_hotkey_manager`] and attach it with
+    /// [`Self::set_hotkey_manager`].
     pub fn new(settings: QuickTranslateSettings) -> Self {
-        let translator = build_translator(&settings);
-        let hotkey_manager = if settings.enabled {
-            match create_and_register(&settings) {
-                Ok(mgr) => Some(mgr),
-                Err(e) => {
-                    warn!(error = %e, "failed to register hotkey");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
         Self {
-            hotkey_manager,
-            translator,
+            hotkey_manager: None,
+            translator: build_translator(&settings),
             settings,
             popup_status: PopupStatus::Hidden,
         }
+    }
+
+    /// Attach a hotkey manager built off the UI thread (see
+    /// [`make_hotkey_manager`]). Pass `None` to drop the current one.
+    pub fn set_hotkey_manager(&mut self, manager: Option<Box<dyn HotkeyManager>>) {
+        self.hotkey_manager = manager;
     }
 
     /// Update settings and reconfigure the hotkey/translator as needed.
@@ -358,6 +358,20 @@ fn build_translator(settings: &QuickTranslateSettings) -> Arc<dyn Translator> {
     ))
 }
 
+/// Build a hotkey manager for `settings`, logging failures as `None`.
+///
+/// Blocking on some backends: the XDG portal backend waits up to a few
+/// seconds for its first bind, so call this off the UI thread.
+pub fn make_hotkey_manager(settings: QuickTranslateSettings) -> Option<Box<dyn HotkeyManager>> {
+    match create_and_register(&settings) {
+        Ok(mgr) => Some(mgr),
+        Err(e) => {
+            warn!(error = %e, "failed to register hotkey");
+            None
+        }
+    }
+}
+
 /// Create a hotkey manager and register the quick-translate hotkey.
 fn create_and_register(
     settings: &QuickTranslateSettings,
@@ -365,4 +379,25 @@ fn create_and_register(
     let manager = create_hotkey_manager();
     manager.register(QUICK_TRANSLATE_ID, &settings.hotkey)?;
     Ok(manager)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression lock for the slow-startup bug (see the twin test in
+    /// `word_lookup`): `QuickTranslateEngine::new` must NOT register
+    /// hotkeys on the calling thread — the XDG portal backend blocks up to
+    /// 3s for its first bind, which delayed the main window on startup.
+    #[test]
+    fn new_leaves_hotkey_registration_to_background() {
+        let engine = QuickTranslateEngine::new(QuickTranslateSettings {
+            enabled: true,
+            ..Default::default()
+        });
+        assert!(
+            engine.hotkey_manager.is_none(),
+            "new() must not register hotkeys synchronously (it blocks on the portal backend)"
+        );
+    }
 }

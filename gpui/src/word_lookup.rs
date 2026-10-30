@@ -78,21 +78,16 @@ pub struct WordLookupEngine {
 
 impl WordLookupEngine {
     /// Create a new engine with the given settings.
+    ///
+    /// Does NOT register the hotkey: the XDG portal backend blocks up to a
+    /// few seconds for its first bind (see [`make_hotkey_manager`]), and
+    /// construction runs on the UI thread (inside `DictState::new`), where
+    /// that block delayed the first frame. Build the manager off the UI
+    /// thread with [`make_hotkey_manager`] and attach it with
+    /// [`Self::set_hotkey_manager`].
     pub fn new(settings: WordLookupSettings) -> Self {
-        let hotkey_manager = if settings.enabled {
-            match create_and_register(&settings) {
-                Ok(mgr) => Some(mgr),
-                Err(e) => {
-                    warn!(error = %e, "word lookup: failed to register hotkey");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
         Self {
-            hotkey_manager,
+            hotkey_manager: None,
             settings,
             status: LookupStatus::Hidden,
         }
@@ -373,6 +368,25 @@ fn create_and_register(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression lock for the slow-startup bug: `WordLookupEngine::new`
+    /// must NOT register hotkeys on the calling thread. The XDG portal
+    /// backend blocks up to `BIND_SETTLE_TIMEOUT` (3s) waiting for its first
+    /// bind to settle; doing that inside `DictState::new` delayed the main
+    /// dictionary window's first frame by ~3s on every startup (GNOME/Wayland).
+    /// Registration happens off the UI thread via `make_hotkey_manager` +
+    /// `set_hotkey_manager` (see `word_lookup_panel::set_word_lookup_enabled`).
+    #[test]
+    fn new_leaves_hotkey_registration_to_background() {
+        let engine = WordLookupEngine::new(WordLookupSettings {
+            enabled: true,
+            ..Default::default()
+        });
+        assert!(
+            engine.hotkey_manager.is_none(),
+            "new() must not register hotkeys synchronously (it blocks on the portal backend)"
+        );
+    }
 
     #[test]
     fn normalize_trims_surrounding_punctuation() {

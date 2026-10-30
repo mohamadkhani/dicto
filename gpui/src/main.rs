@@ -30,7 +30,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext as _, AssetSource, Bounds, QuitMode, SharedString, WindowBounds,
+    App, AppContext as _, AssetSource, AsyncApp, Bounds, QuitMode, SharedString, WindowBounds,
     WindowDecorations, WindowOptions, px, size,
 };
 use gpui_component::{Root, Theme, ThemeMode};
@@ -290,6 +290,7 @@ fn main() {
         }
     }
 
+
     #[cfg(target_os = "linux")]
     gtk::init().expect("failed to init GTK");
 
@@ -511,6 +512,65 @@ fn open_dictionary_window(cx: &mut App) {
     }
 
     if let Some(state) = state_for_indexing.into_inner() {
+        // Attach hotkey managers built OFF the UI thread: the XDG portal
+        // backend blocks up to `BIND_SETTLE_TIMEOUT` (3s) waiting for its
+        // first bind to settle. Doing that inside `DictState::new` delayed
+        // the first frame by ~3s on every startup (GNOME/Wayland). The
+        // window shows immediately; hotkeys land moments later.
+        {
+            let (wl, qt, attempt) = {
+                let s = state.read(cx);
+                (s.word_lookup.clone(), s.quick_translate.clone(), s.word_lookup_toggle_gen)
+            };
+            let state_bg = state.clone();
+            cx.spawn(async move |cx: &mut AsyncApp| {
+                let wl_build = wl.clone();
+                let qt_build = qt.clone();
+                let (wl_mgr, qt_mgr) = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let wl_mgr = if wl_build.enabled {
+                            crate::word_lookup::make_hotkey_manager(wl_build)
+                        } else {
+                            None
+                        };
+                        let qt_mgr = if qt_build.enabled {
+                            crate::quick_translate::make_hotkey_manager(qt_build)
+                        } else {
+                            None
+                        };
+                        (wl_mgr, qt_mgr)
+                    })
+                    .await;
+
+                cx.update(|cx| {
+                    cx.update_entity(&state_bg, |s, _cx| {
+                        // A settings change or toggle during registration
+                        // makes the manager stale — drop it instead of
+                        // attaching (same guard as the toggle flow).
+                        if let Some(mgr) = wl_mgr
+                            && s.word_lookup_toggle_gen == attempt
+                            && s.word_lookup.enabled == wl.enabled
+                            && s.word_lookup.hotkey == wl.hotkey
+                        {
+                            if let Some(engine) = s.word_lookup_engine.as_mut() {
+                                engine.set_hotkey_manager(Some(mgr));
+                            }
+                        }
+                        if let Some(mgr) = qt_mgr
+                            && s.quick_translate.enabled == qt.enabled
+                            && s.quick_translate.hotkey == qt.hotkey
+                        {
+                            if let Some(engine) = s.quick_translate_engine.as_mut() {
+                                engine.set_hotkey_manager(Some(mgr));
+                            }
+                        }
+                    });
+                });
+            })
+            .detach();
+        }
+
         // Keep popup state in sync when the popup window is destroyed by a
         // path that bypasses `close_popup` (window manager close, Alt+F4,
         // compositor kill). Without this the stale handle lingers in
