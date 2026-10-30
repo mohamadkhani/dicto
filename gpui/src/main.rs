@@ -4,6 +4,7 @@
 mod alsa_default;
 mod app;
 mod audio;
+mod autostart;
 mod bidi;
 mod catalog;
 mod colors;
@@ -30,8 +31,8 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext as _, AssetSource, AsyncApp, Bounds, QuitMode, SharedString, WindowBounds,
-    WindowDecorations, WindowOptions, px, size,
+    App, AppContext as _, AssetSource, AsyncApp, Bounds, Entity, QuitMode, SharedString,
+    WindowBounds, WindowDecorations, WindowOptions, px, size,
 };
 use gpui_component::{Root, Theme, ThemeMode};
 use gpui_platform::application;
@@ -201,7 +202,7 @@ fn ipc_instance_running(socket_name: &str) -> bool {
 /// process lifetime. Returns `true` when another instance already owns it.
 #[cfg(target_os = "windows")]
 fn win32_already_running() -> bool {
-    use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+    use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
     use windows::Win32::System::Threading::CreateMutexW;
     use windows::core::w;
 
@@ -225,7 +226,7 @@ fn win32_already_running() -> bool {
 #[cfg(target_os = "windows")]
 fn show_existing_window() {
     use windows::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE,
+        FindWindowW, SW_RESTORE, SetForegroundWindow, ShowWindow,
     };
     use windows::core::{PCWSTR, w};
 
@@ -409,7 +410,6 @@ fn main() {
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     let _ = tray_requested;
 
-
     #[cfg(target_os = "linux")]
     gtk::init().expect("failed to init GTK");
 
@@ -510,9 +510,23 @@ fn main() {
                 poll_tray_actions(cx, tray_rx, tray_token);
             }
 
-            open_dictionary_window(cx);
-
-            cx.activate(true);
+            // With `--tray` (autostart) start hidden in the tray: no
+            // dictionary window, no activation — but the tray, the global
+            // hotkeys, and the popup triggers must still come up, so the
+            // app machinery starts headless. First-run setup wins over
+            // hiding: the telemetry consent prompt and the
+            // empty-dictionaries import modal are blocking surfaces that
+            // need the window.
+            let setup_needed = matches!(
+                mdict_rs::settings::current().telemetry_consent,
+                mdict_rs::settings::TelemetryConsent::Undecided
+            ) || mdict_rs::config::discover_mdx_files().is_empty();
+            if tray_requested && !setup_needed {
+                start_background_machinery(cx);
+            } else {
+                open_dictionary_window(cx);
+                cx.activate(true);
+            }
         });
 }
 
@@ -614,6 +628,131 @@ fn raise_dictionary_window(token: Option<String>, cx: &mut App) {
     }
 }
 
+/// Attach hotkey managers built off the UI thread to the state's
+/// engines. The XDG portal backend blocks up to `BIND_SETTLE_TIMEOUT`
+/// (3s) waiting for its first bind to settle, so callers run this after
+/// the critical startup work (see the original inline comments below).
+fn attach_hotkey_managers(state: &Entity<DictState>, cx: &mut App) {
+    // Attach hotkey managers built OFF the UI thread: the XDG portal
+    // backend blocks up to `BIND_SETTLE_TIMEOUT` (3s) waiting for its
+    // first bind to settle. Doing that inside `DictState::new` delayed
+    // the first frame by ~3s on every startup (GNOME/Wayland). The
+    // window shows immediately; hotkeys land moments later.
+    {
+        let (wl, qt, attempt) = {
+            let s = state.read(cx);
+            (
+                s.word_lookup.clone(),
+                s.quick_translate.clone(),
+                s.word_lookup_toggle_gen,
+            )
+        };
+        let state_bg = state.clone();
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            let wl_build = wl.clone();
+            let qt_build = qt.clone();
+            let (wl_mgr, qt_mgr) = cx
+                .background_executor()
+                .spawn(async move {
+                    let wl_mgr = if wl_build.enabled {
+                        crate::word_lookup::make_hotkey_manager(wl_build)
+                    } else {
+                        None
+                    };
+                    let qt_mgr = if qt_build.enabled {
+                        crate::quick_translate::make_hotkey_manager(qt_build)
+                    } else {
+                        None
+                    };
+                    (wl_mgr, qt_mgr)
+                })
+                .await;
+
+            cx.update(|cx| {
+                cx.update_entity(&state_bg, |s, _cx| {
+                    // A settings change or toggle during registration
+                    // makes the manager stale — drop it instead of
+                    // attaching (same guard as the toggle flow).
+                    if let Some(mgr) = wl_mgr
+                        && s.word_lookup_toggle_gen == attempt
+                        && s.word_lookup.enabled == wl.enabled
+                        && s.word_lookup.hotkey == wl.hotkey
+                        && let Some(engine) = s.word_lookup_engine.as_mut()
+                    {
+                        engine.set_hotkey_manager(Some(mgr));
+                    }
+                    if let Some(mgr) = qt_mgr
+                        && s.quick_translate.enabled == qt.enabled
+                        && s.quick_translate.hotkey == qt.hotkey
+                        && let Some(engine) = s.quick_translate_engine.as_mut()
+                    {
+                        engine.set_hotkey_manager(Some(mgr));
+                    }
+                });
+            });
+        })
+        .detach();
+    }
+}
+
+/// Keep popup state in sync when the popup window is destroyed by a
+/// path that bypasses `close_popup` (window manager close, Alt+F4,
+/// compositor kill).
+fn watch_popup_window_close(state: &Entity<DictState>, cx: &mut App) {
+    // Keep popup state in sync when the popup window is destroyed by a
+    // path that bypasses `close_popup` (window manager close, Alt+F4,
+    // compositor kill). Without this the stale handle lingers in
+    // `qt_popup_window` and later hotkey/tray triggers silently do
+    // nothing.
+    let closed_state = state.clone();
+    cx.on_window_closed(move |cx, closed_id| {
+        let popup_id = closed_state
+            .read(cx)
+            .qt_popup_window
+            .map(|handle| handle.window_id());
+        if popup_id == Some(closed_id) {
+            closed_state.update(cx, |s, cx| {
+                s.qt_popup_window = None;
+                // A tokenless re-trigger closes the window only to
+                // reopen a fresh one on the next poll tick — the popup
+                // state (and its new selection) must survive.
+                let replace_pending = s.qt_replace_pending;
+                if let Some(engine) = s.quick_translate_engine.as_mut()
+                    && !replace_pending
+                {
+                    engine.hide_popup();
+                }
+                if let Some(engine) = s.word_lookup_engine.as_mut()
+                    && !replace_pending
+                {
+                    engine.hide_popup();
+                }
+                // The popup window is gone (e.g. closed by the window
+                // manager) — stop speaking the source/translation
+                // clips rather than leaving orphaned audio playing.
+                s.playback_source.stop();
+                s.playback_translation.stop();
+                cx.notify();
+            });
+        }
+    })
+    .detach();
+}
+
+/// Start the app machinery without showing the main window (`--tray`).
+/// Same wiring `open_dictionary_window` wraps around the window: state +
+/// engines (which register the OS-level shortcuts in `DictState::new`),
+/// hotkey-manager registration, the trigger poll loop, popup housekeeping,
+/// and background indexing. The tray's "Show Dictionary" (or a second
+/// plain launch) later opens the window via `raise_dictionary_window`.
+fn start_background_machinery(cx: &mut App) {
+    let state = cx.new(|_cx| DictState::new());
+    attach_hotkey_managers(&state, cx);
+    watch_popup_window_close(&state, cx);
+    app::spawn_trigger_poll_loop(state.clone(), cx);
+    indexing::spawn(state, cx);
+}
+
 fn open_dictionary_window(cx: &mut App) {
     dicto_telemetry::get().track(dicto_telemetry::Event::WindowOpened);
     let bounds = Bounds::centered(None, size(px(920.), px(680.)), cx);
@@ -652,104 +791,8 @@ fn open_dictionary_window(cx: &mut App) {
     }
 
     if let Some(state) = state_for_indexing.into_inner() {
-        // Attach hotkey managers built OFF the UI thread: the XDG portal
-        // backend blocks up to `BIND_SETTLE_TIMEOUT` (3s) waiting for its
-        // first bind to settle. Doing that inside `DictState::new` delayed
-        // the first frame by ~3s on every startup (GNOME/Wayland). The
-        // window shows immediately; hotkeys land moments later.
-        {
-            let (wl, qt, attempt) = {
-                let s = state.read(cx);
-                (s.word_lookup.clone(), s.quick_translate.clone(), s.word_lookup_toggle_gen)
-            };
-            let state_bg = state.clone();
-            cx.spawn(async move |cx: &mut AsyncApp| {
-                let wl_build = wl.clone();
-                let qt_build = qt.clone();
-                let (wl_mgr, qt_mgr) = cx
-                    .background_executor()
-                    .spawn(async move {
-                        let wl_mgr = if wl_build.enabled {
-                            crate::word_lookup::make_hotkey_manager(wl_build)
-                        } else {
-                            None
-                        };
-                        let qt_mgr = if qt_build.enabled {
-                            crate::quick_translate::make_hotkey_manager(qt_build)
-                        } else {
-                            None
-                        };
-                        (wl_mgr, qt_mgr)
-                    })
-                    .await;
-
-                cx.update(|cx| {
-                    cx.update_entity(&state_bg, |s, _cx| {
-                        // A settings change or toggle during registration
-                        // makes the manager stale — drop it instead of
-                        // attaching (same guard as the toggle flow).
-                        if let Some(mgr) = wl_mgr
-                            && s.word_lookup_toggle_gen == attempt
-                            && s.word_lookup.enabled == wl.enabled
-                            && s.word_lookup.hotkey == wl.hotkey
-                        {
-                            if let Some(engine) = s.word_lookup_engine.as_mut() {
-                                engine.set_hotkey_manager(Some(mgr));
-                            }
-                        }
-                        if let Some(mgr) = qt_mgr
-                            && s.quick_translate.enabled == qt.enabled
-                            && s.quick_translate.hotkey == qt.hotkey
-                        {
-                            if let Some(engine) = s.quick_translate_engine.as_mut() {
-                                engine.set_hotkey_manager(Some(mgr));
-                            }
-                        }
-                    });
-                });
-            })
-            .detach();
-        }
-
-        // Keep popup state in sync when the popup window is destroyed by a
-        // path that bypasses `close_popup` (window manager close, Alt+F4,
-        // compositor kill). Without this the stale handle lingers in
-        // `qt_popup_window` and later hotkey/tray triggers silently do
-        // nothing.
-        let closed_state = state.clone();
-        cx.on_window_closed(move |cx, closed_id| {
-            let popup_id = closed_state
-                .read(cx)
-                .qt_popup_window
-                .map(|handle| handle.window_id());
-            if popup_id == Some(closed_id) {
-                closed_state.update(cx, |s, cx| {
-                    s.qt_popup_window = None;
-                    // A tokenless re-trigger closes the window only to
-                    // reopen a fresh one on the next poll tick — the popup
-                    // state (and its new selection) must survive.
-                    let replace_pending = s.qt_replace_pending;
-                    if let Some(engine) = s.quick_translate_engine.as_mut()
-                        && !replace_pending
-                    {
-                        engine.hide_popup();
-                    }
-                    if let Some(engine) = s.word_lookup_engine.as_mut()
-                        && !replace_pending
-                    {
-                        engine.hide_popup();
-                    }
-                    // The popup window is gone (e.g. closed by the window
-                    // manager) — stop speaking the source/translation
-                    // clips rather than leaving orphaned audio playing.
-                    s.playback_source.stop();
-                    s.playback_translation.stop();
-                    cx.notify();
-                });
-            }
-        })
-        .detach();
-
+        attach_hotkey_managers(&state, cx);
+        watch_popup_window_close(&state, cx);
         indexing::spawn(state, cx);
     }
 }

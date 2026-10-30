@@ -192,6 +192,11 @@ pub struct DictState {
     /// (persisted in settings.toml).
     pub word_lookup_hint_dismissed: bool,
 
+    /// User dismissed the "start in tray at login" nudge banner
+    /// (persisted in settings.toml). The feature's own state is read from
+    /// the OS autostart entry, not from settings.
+    pub start_in_tray_hint_dismissed: bool,
+
     /// True while Word Lookup's hotkey is being registered off the UI
     /// thread. Drives the "Registering…" state next to the toggle.
     pub word_lookup_registering: bool,
@@ -255,6 +260,7 @@ impl DictState {
             .unwrap_or_else(|| "none".to_string());
         let auto_shortcuts = settings.auto_shortcuts;
         let word_lookup_hint_dismissed = settings.word_lookup_hint_dismissed;
+        let start_in_tray_hint_dismissed = settings.start_in_tray_hint_dismissed;
 
         let state = Self {
             word_list_scroll: gpui::ScrollHandle::new(),
@@ -280,6 +286,7 @@ impl DictState {
             hotkey_backend: backend,
             auto_shortcuts,
             word_lookup_hint_dismissed,
+            start_in_tray_hint_dismissed,
             word_lookup_registering: false,
             word_lookup_toggle_gen: 0,
             quick_translate_engine: engine,
@@ -417,6 +424,7 @@ impl DictState {
         current.word_lookup = self.word_lookup.clone();
         current.auto_shortcuts = self.auto_shortcuts;
         current.word_lookup_hint_dismissed = self.word_lookup_hint_dismissed;
+        current.start_in_tray_hint_dismissed = self.start_in_tray_hint_dismissed;
         let _ = mdict_rs::settings::save(&current);
     }
 

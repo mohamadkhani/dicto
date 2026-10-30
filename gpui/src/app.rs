@@ -172,208 +172,7 @@ impl DictApp {
 
         // Start periodic polling for quick-translate hotkey events and
         // tray-menu triggers. Runs every 100ms while the app is alive.
-        let poll_state = state.clone();
-        cx.spawn(async move |_this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(100))
-                    .await;
-
-                // Check the tray menu trigger flags
-                let tray_translate = crate::TRAY_TRANSLATE_TRIGGERED
-                    .swap(false, std::sync::atomic::Ordering::Acquire);
-                let tray_lookup =
-                    crate::TRAY_LOOKUP_TRIGGERED.swap(false, std::sync::atomic::Ordering::Acquire);
-
-                // Drain both engines' hotkey events and route triggers.
-                // `poll()` only drains now — the poll loop decides what a
-                // press means: quick translate, or (smart dispatch) a word
-                // lookup when the selection is a single word and the lookup
-                // feature is enabled. Neither trigger translates yet — the
-                // translate popup waits for its Translate click, and the
-                // lookup starts its local query via the returned job.
-                let (lookup_job, triggered) = cx.update_entity(&poll_state, |s, _cx| {
-                    let tts_key = crate::playback::tts_key(&s.quick_translate.tts);
-                    let mut lookup_job: Option<crate::word_lookup::LookupJob> = None;
-                    let mut translate_now = false;
-
-                    let qt_fired = s
-                        .quick_translate_engine
-                        .as_mut()
-                        .map(|e| e.poll())
-                        .unwrap_or(false);
-                    let wl_fired = s
-                        .word_lookup_engine
-                        .as_mut()
-                        .map(|e| e.poll())
-                        .unwrap_or(false);
-
-                    // The engine always exists; the settings flag decides
-                    // whether the translate hotkey smart-dispatches.
-                    let lookup_enabled = s.word_lookup.enabled;
-
-                    if qt_fired {
-                        // Smart dispatch on the translate hotkey: a
-                        // single-word selection goes to the dictionary
-                        // lookup, everything else to quick translate. If the
-                        // selection can't be read here, the translate path
-                        // re-reads it and shows its own error hint.
-                        let selection = crate::selection::read_selected_text().ok();
-                        let is_word = selection
-                            .as_ref()
-                            .map(|(t, _)| crate::selection::is_single_word(t))
-                            .unwrap_or(false);
-                        if is_word && lookup_enabled {
-                            if let Some((text, _)) = selection {
-                                lookup_job =
-                                    Some(s.word_lookup_engine.as_mut().unwrap().lookup_text(text));
-                            }
-                        } else if let Some(engine) = s.quick_translate_engine.as_mut() {
-                            engine.trigger_translate();
-                            translate_now = true;
-                        }
-                    }
-
-                    if wl_fired || tray_lookup {
-                        // The engine handles the disabled case itself — the
-                        // popup shows an enable hint instead of a lookup.
-                        if let Some(engine) = s.word_lookup_engine.as_mut() {
-                            lookup_job = engine.trigger_lookup();
-                        }
-                    } else if tray_translate {
-                        // Tray "Quick Translate" is always a plain translate.
-                        if let Some(engine) = s.quick_translate_engine.as_mut() {
-                            if !qt_fired {
-                                engine.trigger_translate();
-                                translate_now = true;
-                            }
-                        } else {
-                            // No engine exists (feature disabled in
-                            // settings) — say so instead of silently
-                            // eating the trigger.
-                            tracing::warn!(
-                                "quick translate triggered while disabled — \
-                                 enable it in Settings → Translation"
-                            );
-                        }
-                    }
-
-                    // A new selection (or a re-trigger) makes any TTS clip
-                    // speaking the previous selection stale — stop it. The
-                    // clip text is the popup's original (translate) or the
-                    // looked-up word (lookup); the translation slot is keyed
-                    // to the same text either way.
-                    let active_text = match (
-                        s.quick_translate_engine.as_ref().map(|e| e.popup_status()),
-                        s.word_lookup_engine.as_ref().map(|e| e.status()),
-                    ) {
-                        (
-                            Some(crate::quick_translate::PopupStatus::Visible(
-                                crate::components::translate_popup::PopupState::Idle { original },
-                            )),
-                            _,
-                        ) => Some(original.clone()),
-                        (_, Some(crate::word_lookup::LookupStatus::Visible(state))) => {
-                            state.word().map(str::to_string)
-                        }
-                        _ => None,
-                    };
-                    if translate_now || lookup_job.is_some() {
-                        if let Some(text) = active_text {
-                            s.invalidate_tts_clips(Some(&text), Some(&tts_key));
-                        } else {
-                            s.invalidate_tts_clips(None, Some(&tts_key));
-                        }
-                    }
-                    let lookup_triggered = translate_now || lookup_job.is_some();
-                    (lookup_job, lookup_triggered)
-                });
-
-                // Run the lookup on the background executor — the FST query
-                // and HTML parsing are disk-backed and must not block the
-                // UI thread. The outcome flips the popup to Ready/NotFound.
-                if let Some(job) = lookup_job {
-                    let job_state = poll_state.clone();
-                    cx.spawn(async move |cx| {
-                        let outcome = cx
-                            .background_executor()
-                            .spawn(async move { job.run() })
-                            .await;
-                        cx.update_entity(&job_state, |s, cx| {
-                            if let Some(engine) = s.word_lookup_engine.as_mut() {
-                                engine.apply_result(outcome);
-                            }
-                            cx.notify();
-                        });
-                    })
-                    .detach();
-                }
-
-                // The popup is open whenever either engine's status is
-                // Visible (translate and lookup share one popup window).
-                // Reopen it whenever it is visible but has no window — this
-                // both opens the first time AND replaces the window after a
-                // tokenless re-trigger closed it on the previous tick (the
-                // tick gap lets GPUI finish tearing the old surface down;
-                // removing + opening in one tick leaves the new window
-                // unpainted/black).
-                let popup_visible = cx.read_entity(&poll_state, |s, _cx| {
-                    matches!(
-                        s.quick_translate_engine.as_ref().map(|e| e.popup_status()),
-                        Some(crate::quick_translate::PopupStatus::Visible(_))
-                    ) || s
-                        .word_lookup_engine
-                        .as_ref()
-                        .is_some_and(crate::word_lookup::WordLookupEngine::is_visible)
-                });
-                let has_window = cx.read_entity(&poll_state, |s, _cx| s.qt_popup_window.is_some());
-                // True while a tokenless re-trigger has closed the window and
-                // is waiting for its reopen tick (the window-closed observer
-                // hides the engine otherwise).
-                let replace_pending = cx.read_entity(&poll_state, |s, _cx| s.qt_replace_pending);
-                let wants_popup = popup_visible || replace_pending;
-
-                let mut replaced_this_tick = false;
-                // Drain the tray token EVERY tick: it is only meaningful in
-                // the same tick as its trigger (the tray click sets both).
-                // A token left over from an earlier click is stale — Mutter
-                // silently ignores activations with it, so letting it take
-                // the activate branch would swallow the whole trigger.
-                let tray_token = crate::take_tray_translate_token();
-                // `trace!` — this fires every 100 ms; at debug level it
-                // floods the log buffer and evicts useful events.
-                tracing::trace!(
-                    triggered,
-                    popup_visible,
-                    has_window,
-                    tray_token = tray_token.is_some(),
-                    "qt poll tick"
-                );
-                if triggered && popup_visible && has_window {
-                    if let Some(token) = tray_token {
-                        cx.update(|cx: &mut gpui::App| {
-                            activate_popup_window(&poll_state, &token, cx)
-                        });
-                    } else {
-                        // Keyboard-shortcut / IPC re-trigger: close the old
-                        // popup now; the next poll tick opens a fresh one
-                        // (freshly mapped windows get keyboard focus on
-                        // GNOME/Mutter, activated ones don't).
-                        tracing::info!("qt: tokenless re-trigger — replacing popup window");
-                        cx.update(|cx: &mut gpui::App| close_popup_window(&poll_state, cx));
-                        replaced_this_tick = true;
-                    }
-                }
-
-                if wants_popup && !replaced_this_tick && !has_window {
-                    let res = cx.update(|cx: &mut gpui::App| open_translate_popup(&poll_state, cx));
-                    if let Err(e) = res {
-                        tracing::error!(error = %e, "failed to open translate popup");
-                    }
-                }
-            }
-        })
-        .detach();
+        spawn_trigger_poll_loop(state.clone(), cx);
 
         // Probe once (GNOME Wayland only) whether the window-calls
         // extension is available; the Quick Translate popup needs it to
@@ -483,6 +282,13 @@ impl Render for DictApp {
             !s.word_lookup.enabled && !s.word_lookup_hint_dismissed && !s.dictionaries.is_empty()
         };
 
+        // Start-in-tray nudge: shown on every launch until the autostart
+        // entry exists ("Enable") or the banner is dismissed (persisted).
+        let start_in_tray_hint = {
+            let s = self.state.read(cx);
+            !crate::autostart::is_enabled() && !s.start_in_tray_hint_dismissed
+        };
+
         let input_handle = self.input.clone();
         let main = v_flex()
             .size_full()
@@ -504,6 +310,7 @@ impl Render for DictApp {
             .children(window_calls_hint.then(|| window_calls_banner(&self.state, cx)))
             .children(ai_setup_hint.then(|| ai_setup_banner(&self.state, cx)))
             .children(word_lookup_hint.then(|| word_lookup_banner(&self.state, cx)))
+            .children(start_in_tray_hint.then(|| start_in_tray_banner(&self.state, cx)))
             // Search row hosts the cog on its right edge so the button
             // sits outside the title bar's OS-claimed drag region.
             .child(search_bar::search_bar(
@@ -694,6 +501,214 @@ fn open_translate_popup(state: &Entity<DictState>, cx: &mut gpui::App) -> anyhow
     tracing::info!("translate popup: created new window");
 
     Ok(())
+}
+
+/// Start the 100ms poll loop that drains the tray-menu / IPC trigger
+/// flags and the engines' hotkey presses, and keeps the shared popup
+/// window in sync. Detached — it runs for the app's lifetime, one loop
+/// per [`DictState`] (created with the main window, or headless under
+/// `--tray`).
+pub fn spawn_trigger_poll_loop(state: Entity<DictState>, cx: &mut gpui::App) {
+    let poll_state = state;
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(100))
+                .await;
+
+            // Check the tray menu trigger flags
+            let tray_translate =
+                crate::TRAY_TRANSLATE_TRIGGERED.swap(false, std::sync::atomic::Ordering::Acquire);
+            let tray_lookup =
+                crate::TRAY_LOOKUP_TRIGGERED.swap(false, std::sync::atomic::Ordering::Acquire);
+
+            // Drain both engines' hotkey events and route triggers.
+            // `poll()` only drains now — the poll loop decides what a
+            // press means: quick translate, or (smart dispatch) a word
+            // lookup when the selection is a single word and the lookup
+            // feature is enabled. Neither trigger translates yet — the
+            // translate popup waits for its Translate click, and the
+            // lookup starts its local query via the returned job.
+            let (lookup_job, triggered) = cx.update_entity(&poll_state, |s, _cx| {
+                let tts_key = crate::playback::tts_key(&s.quick_translate.tts);
+                let mut lookup_job: Option<crate::word_lookup::LookupJob> = None;
+                let mut translate_now = false;
+
+                let qt_fired = s
+                    .quick_translate_engine
+                    .as_mut()
+                    .map(|e| e.poll())
+                    .unwrap_or(false);
+                let wl_fired = s
+                    .word_lookup_engine
+                    .as_mut()
+                    .map(|e| e.poll())
+                    .unwrap_or(false);
+
+                // The engine always exists; the settings flag decides
+                // whether the translate hotkey smart-dispatches.
+                let lookup_enabled = s.word_lookup.enabled;
+
+                if qt_fired {
+                    // Smart dispatch on the translate hotkey: a
+                    // single-word selection goes to the dictionary
+                    // lookup, everything else to quick translate. If the
+                    // selection can't be read here, the translate path
+                    // re-reads it and shows its own error hint.
+                    let selection = crate::selection::read_selected_text().ok();
+                    let is_word = selection
+                        .as_ref()
+                        .map(|(t, _)| crate::selection::is_single_word(t))
+                        .unwrap_or(false);
+                    if is_word && lookup_enabled {
+                        if let Some((text, _)) = selection {
+                            lookup_job =
+                                Some(s.word_lookup_engine.as_mut().unwrap().lookup_text(text));
+                        }
+                    } else if let Some(engine) = s.quick_translate_engine.as_mut() {
+                        engine.trigger_translate();
+                        translate_now = true;
+                    }
+                }
+
+                if wl_fired || tray_lookup {
+                    // The engine handles the disabled case itself — the
+                    // popup shows an enable hint instead of a lookup.
+                    if let Some(engine) = s.word_lookup_engine.as_mut() {
+                        lookup_job = engine.trigger_lookup();
+                    }
+                } else if tray_translate {
+                    // Tray "Quick Translate" is always a plain translate.
+                    if let Some(engine) = s.quick_translate_engine.as_mut() {
+                        if !qt_fired {
+                            engine.trigger_translate();
+                            translate_now = true;
+                        }
+                    } else {
+                        // No engine exists (feature disabled in
+                        // settings) — say so instead of silently
+                        // eating the trigger.
+                        tracing::warn!(
+                            "quick translate triggered while disabled — \
+                             enable it in Settings → Translation"
+                        );
+                    }
+                }
+
+                // A new selection (or a re-trigger) makes any TTS clip
+                // speaking the previous selection stale — stop it. The
+                // clip text is the popup's original (translate) or the
+                // looked-up word (lookup); the translation slot is keyed
+                // to the same text either way.
+                let active_text = match (
+                    s.quick_translate_engine.as_ref().map(|e| e.popup_status()),
+                    s.word_lookup_engine.as_ref().map(|e| e.status()),
+                ) {
+                    (
+                        Some(crate::quick_translate::PopupStatus::Visible(
+                            crate::components::translate_popup::PopupState::Idle { original },
+                        )),
+                        _,
+                    ) => Some(original.clone()),
+                    (_, Some(crate::word_lookup::LookupStatus::Visible(state))) => {
+                        state.word().map(str::to_string)
+                    }
+                    _ => None,
+                };
+                if translate_now || lookup_job.is_some() {
+                    if let Some(text) = active_text {
+                        s.invalidate_tts_clips(Some(&text), Some(&tts_key));
+                    } else {
+                        s.invalidate_tts_clips(None, Some(&tts_key));
+                    }
+                }
+                let lookup_triggered = translate_now || lookup_job.is_some();
+                (lookup_job, lookup_triggered)
+            });
+
+            // Run the lookup on the background executor — the FST query
+            // and HTML parsing are disk-backed and must not block the
+            // UI thread. The outcome flips the popup to Ready/NotFound.
+            if let Some(job) = lookup_job {
+                let job_state = poll_state.clone();
+                cx.spawn(async move |cx| {
+                    let outcome = cx
+                        .background_executor()
+                        .spawn(async move { job.run() })
+                        .await;
+                    cx.update_entity(&job_state, |s, cx| {
+                        if let Some(engine) = s.word_lookup_engine.as_mut() {
+                            engine.apply_result(outcome);
+                        }
+                        cx.notify();
+                    });
+                })
+                .detach();
+            }
+
+            // The popup is open whenever either engine's status is
+            // Visible (translate and lookup share one popup window).
+            // Reopen it whenever it is visible but has no window — this
+            // both opens the first time AND replaces the window after a
+            // tokenless re-trigger closed it on the previous tick (the
+            // tick gap lets GPUI finish tearing the old surface down;
+            // removing + opening in one tick leaves the new window
+            // unpainted/black).
+            let popup_visible = cx.read_entity(&poll_state, |s, _cx| {
+                matches!(
+                    s.quick_translate_engine.as_ref().map(|e| e.popup_status()),
+                    Some(crate::quick_translate::PopupStatus::Visible(_))
+                ) || s
+                    .word_lookup_engine
+                    .as_ref()
+                    .is_some_and(crate::word_lookup::WordLookupEngine::is_visible)
+            });
+            let has_window = cx.read_entity(&poll_state, |s, _cx| s.qt_popup_window.is_some());
+            // True while a tokenless re-trigger has closed the window and
+            // is waiting for its reopen tick (the window-closed observer
+            // hides the engine otherwise).
+            let replace_pending = cx.read_entity(&poll_state, |s, _cx| s.qt_replace_pending);
+            let wants_popup = popup_visible || replace_pending;
+
+            let mut replaced_this_tick = false;
+            // Drain the tray token EVERY tick: it is only meaningful in
+            // the same tick as its trigger (the tray click sets both).
+            // A token left over from an earlier click is stale — Mutter
+            // silently ignores activations with it, so letting it take
+            // the activate branch would swallow the whole trigger.
+            let tray_token = crate::take_tray_translate_token();
+            // `trace!` — this fires every 100 ms; at debug level it
+            // floods the log buffer and evicts useful events.
+            tracing::trace!(
+                triggered,
+                popup_visible,
+                has_window,
+                tray_token = tray_token.is_some(),
+                "qt poll tick"
+            );
+            if triggered && popup_visible && has_window {
+                if let Some(token) = tray_token {
+                    cx.update(|cx: &mut gpui::App| activate_popup_window(&poll_state, &token, cx));
+                } else {
+                    // Keyboard-shortcut / IPC re-trigger: close the old
+                    // popup now; the next poll tick opens a fresh one
+                    // (freshly mapped windows get keyboard focus on
+                    // GNOME/Mutter, activated ones don't).
+                    tracing::info!("qt: tokenless re-trigger — replacing popup window");
+                    cx.update(|cx: &mut gpui::App| close_popup_window(&poll_state, cx));
+                    replaced_this_tick = true;
+                }
+            }
+
+            if wants_popup && !replaced_this_tick && !has_window {
+                let res = cx.update(|cx: &mut gpui::App| open_translate_popup(&poll_state, cx));
+                if let Err(e) = res {
+                    tracing::error!(error = %e, "failed to open translate popup");
+                }
+            }
+        }
+    })
+    .detach();
 }
 
 /// Close the popup window only — the engine keeps its (new) popup state and
@@ -1029,6 +1044,106 @@ fn word_lookup_banner(state: &Entity<DictState>, cx: &Context<DictApp>) -> gpui:
                                 cx.notify();
                             });
                             let _ = mdict_rs::settings::set_word_lookup_hint_dismissed(true);
+                        })),
+                ),
+        )
+        .into_any_element()
+}
+
+/// "Start Dicto in tray at login" nudge, shown on every launch until the
+/// autostart entry exists or the banner is dismissed. `Enable` writes the
+/// entry immediately (`autostart::enable`); the `x` persists the dismissal
+/// in settings.toml. May stack with the other banners.
+fn start_in_tray_banner(state: &Entity<DictState>, cx: &Context<DictApp>) -> gpui::AnyElement {
+    let dismiss_state = state.clone();
+
+    h_flex()
+        .w_full()
+        .items_center()
+        .justify_between()
+        .gap(px(8.))
+        .px(px(12.))
+        .py(px(6.))
+        .bg(colors::surface())
+        .border_b_1()
+        .border_color(colors::border())
+        .child(
+            h_flex()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(colors::update())
+                        .child("✨"),
+                )
+                .child(
+                    v_flex()
+                        .gap(px(2.))
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(colors::text())
+                                .child(SharedString::from("Start Dicto in tray at login")),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(colors::text_secondary())
+                                .child(SharedString::from(
+                                    "Dicto will start in the background with no window. \
+                                 Use the tray icon or the shortcuts.",
+                                )),
+                        ),
+                ),
+        )
+        .child(
+            h_flex()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .id("sit-enable-banner")
+                        .cursor_pointer()
+                        .px(px(8.))
+                        .py(px(3.))
+                        .rounded(px(6.))
+                        .text_size(px(12.))
+                        .text_color(colors::bg())
+                        .bg(colors::primary())
+                        .hover(|s| s.opacity(0.9))
+                        .child("Enable")
+                        .on_click(cx.listener(move |_this, _ev, _window, cx| {
+                            match crate::autostart::enable() {
+                                Ok(()) => tracing::info!("autostart: enabled"),
+                                Err(e) => tracing::warn!("autostart: failed to enable: {e}"),
+                            }
+                            // is_enabled() is now true — re-render hides the
+                            // banner.
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    v_flex()
+                        .id("sit-dismiss-banner")
+                        .cursor_pointer()
+                        .size(px(22.))
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(6.))
+                        .hover(|s| s.bg(colors::hover()))
+                        .child(
+                            gpui::svg()
+                                .path("icons/close.svg")
+                                .self_center()
+                                .size(px(14.))
+                                .text_color(colors::text_secondary()),
+                        )
+                        .on_click(cx.listener(move |_this, _ev, _window, cx| {
+                            cx.update_entity(&dismiss_state, |s, cx| {
+                                s.start_in_tray_hint_dismissed = true;
+                                cx.notify();
+                            });
+                            let _ = mdict_rs::settings::set_start_in_tray_hint_dismissed(true);
                         })),
                 ),
         )

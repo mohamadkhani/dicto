@@ -54,6 +54,12 @@ pub struct Settings {
     /// Persisted so it is shown at most once per decision.
     #[serde(default)]
     pub word_lookup_hint_dismissed: bool,
+    /// User dismissed the "start in tray at login" nudge banner.
+    /// Persisted so it is shown at most once per decision. NOTE: the
+    /// feature's own state is NOT stored here — it is read from "does the
+    /// OS autostart entry exist" (see `dicto::autostart`).
+    #[serde(default)]
+    pub start_in_tray_hint_dismissed: bool,
 }
 
 impl Default for Settings {
@@ -70,6 +76,7 @@ impl Default for Settings {
             window_calls_hint_dismissed: false,
             ai_setup_hint_dismissed: false,
             word_lookup_hint_dismissed: false,
+            start_in_tray_hint_dismissed: false,
         }
     }
 }
@@ -396,6 +403,19 @@ pub fn set_word_lookup_hint_dismissed(dismissed: bool) -> anyhow::Result<()> {
         return Ok(());
     }
     current.word_lookup_hint_dismissed = dismissed;
+    save(&current)?;
+    *SETTINGS.write().unwrap() = current;
+    Ok(())
+}
+
+/// Persist the "start in tray at login" nudge dismissal, preserving every
+/// other field (same pattern as [`update_consent`]).
+pub fn set_start_in_tray_hint_dismissed(dismissed: bool) -> anyhow::Result<()> {
+    let mut current = current();
+    if current.start_in_tray_hint_dismissed == dismissed {
+        return Ok(());
+    }
+    current.start_in_tray_hint_dismissed = dismissed;
     save(&current)?;
     *SETTINGS.write().unwrap() = current;
     Ok(())
