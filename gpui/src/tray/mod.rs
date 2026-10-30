@@ -31,7 +31,13 @@ pub type SharedToken = Arc<Mutex<Option<String>>>;
 /// Actions the tray requests the GPUI main loop to perform.
 #[derive(Debug)]
 pub enum TrayAction {
-    Show,
+    /// Open or raise the dictionary window. The optional token is the
+    /// compositor-minted xdg-activation token to feed `activate_with_token`
+    /// (captured at click time — same pattern as netkeep's "Settings…"
+    /// item).
+    Show {
+        token: Option<String>,
+    },
     QuickTranslate,
     QuickLookup,
     Quit,

@@ -106,6 +106,12 @@ pub fn take_ipc_activation_token() -> Option<String> {
         .and_then(|mut g| g.take())
 }
 
+/// The dictionary (main) window. Tray "Show Dictionary" raises+focuses THIS
+/// window (raising whatever window happens to exist would hand keyboard
+/// focus to a popup) and reopens it after the user closes it — the app
+/// stays alive in the tray (`QuitMode::Explicit`).
+static DICT_WINDOW: std::sync::Mutex<Option<gpui::AnyWindowHandle>> = std::sync::Mutex::new(None);
+
 /// Path to an IPC socket used by `dicto --translate` / `dicto --lookup` to
 /// signal a running instance. Lives in the user's runtime directory.
 #[cfg(target_os = "linux")]
@@ -383,7 +389,8 @@ fn main() {
 
 /// Poll the tray action channel from a GPUI background task.
 ///
-/// - `Show` → open (or re-activate) the dictionary window.
+/// - `Show` → raise + focus (or reopen) the dictionary window with the
+///   tray's xdg-activation token.
 /// - `QuickTranslate` → set the same flag the `dicto --translate` IPC path
 ///   uses; the `app.rs` poll loop picks it up and runs `trigger_translate`.
 ///   On Linux this also stashes the tray's xdg-activation token so the popup
@@ -398,13 +405,9 @@ fn poll_tray_actions(
         loop {
             while let Ok(action) = tray_rx.try_recv() {
                 match action {
-                    TrayAction::Show => {
+                    TrayAction::Show { token } => {
                         cx.update(|cx| {
-                            if cx.windows().is_empty() {
-                                open_dictionary_window(cx);
-                            } else {
-                                cx.activate(true);
-                            }
+                            raise_dictionary_window(token, cx);
                         });
                     }
                     TrayAction::QuickTranslate => {
@@ -435,6 +438,41 @@ fn poll_tray_actions(
     .detach();
 }
 
+/// Raise + keyboard-focus the dictionary window; open a fresh one when it
+/// has been closed (the app keeps running in the tray).
+///
+/// The tray captures the compositor-minted xdg-activation token
+/// (`ProvideXdgActivationToken`) at click time; feeding it to
+/// `activate_with_token` (mohamadkhani/zed gpui fork) makes Mutter
+/// authoritatively grant the raise instead of leaving the window behind the
+/// foreground app under focus-stealing prevention. Same pattern as netkeep's
+/// "Settings…" tray item (apps/gpui/src/tray.rs). Without a token (Windows,
+/// hosts without the SNI method) `activate_window` + `cx.activate` still do
+/// the platform-level raise.
+fn raise_dictionary_window(token: Option<String>, cx: &mut App) {
+    let handle = DICT_WINDOW.lock().ok().and_then(|g| *g);
+    let raised = handle
+        .and_then(|handle| {
+            handle
+                .update(cx, |_, window, _cx| {
+                    window.activate_window();
+                    if let Some(tok) = token.as_deref() {
+                        window.activate_with_token(tok);
+                    }
+                })
+                .ok()
+        })
+        .is_some();
+    if raised {
+        cx.activate(true);
+    } else {
+        // `update` failed: the window was closed (or never opened). A fresh
+        // map gets keyboard focus on GNOME/Mutter on its own (see the
+        // tokenless-retrigger note in `app.rs`).
+        open_dictionary_window(cx);
+    }
+}
+
 fn open_dictionary_window(cx: &mut App) {
     dicto_telemetry::get().track(dicto_telemetry::Event::WindowOpened);
     let bounds = Bounds::centered(None, size(px(920.), px(680.)), cx);
@@ -442,28 +480,35 @@ fn open_dictionary_window(cx: &mut App) {
     let state_for_indexing: std::cell::RefCell<Option<gpui::Entity<DictState>>> =
         std::cell::RefCell::new(None);
 
-    cx.open_window(
-        WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            window_decorations: Some(WindowDecorations::Client),
-            titlebar: Some(gpui::TitlebarOptions {
-                title: Some("Dicto".into()),
-                appears_transparent: cfg!(target_os = "windows"),
+    let handle: gpui::AnyWindowHandle = cx
+        .open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_decorations: Some(WindowDecorations::Client),
+                titlebar: Some(gpui::TitlebarOptions {
+                    title: Some("Dicto".into()),
+                    appears_transparent: cfg!(target_os = "windows"),
+                    ..Default::default()
+                }),
+                window_min_size: Some(size(px(600.), px(400.))),
+                is_resizable: true,
+                app_id: Some("dicto".into()),
                 ..Default::default()
-            }),
-            window_min_size: Some(size(px(600.), px(400.))),
-            is_resizable: true,
-            app_id: Some("dicto".into()),
-            ..Default::default()
-        },
-        |window, cx| {
-            let state = cx.new(|_cx| DictState::new());
-            *state_for_indexing.borrow_mut() = Some(state.clone());
-            let view = cx.new(|cx| DictApp::new(state, window, cx));
-            cx.new(|cx| Root::new(view, window, cx))
-        },
-    )
-    .expect("failed to open window");
+            },
+            |window, cx| {
+                let state = cx.new(|_cx| DictState::new());
+                *state_for_indexing.borrow_mut() = Some(state.clone());
+                let view = cx.new(|cx| DictApp::new(state, window, cx));
+                cx.new(|cx| Root::new(view, window, cx))
+            },
+        )
+        .expect("failed to open window")
+        .into();
+    // Track the handle for the tray's "Show Dictionary": it raises+focuses
+    // this exact window (`cx.windows()` would also match popups).
+    if let Ok(mut g) = DICT_WINDOW.lock() {
+        *g = Some(handle);
+    }
 
     if let Some(state) = state_for_indexing.into_inner() {
         // Keep popup state in sync when the popup window is destroyed by a

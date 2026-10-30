@@ -70,7 +70,7 @@ fn build_tray(action_tx: mpsc::Sender<TrayAction>) -> Result<(), String> {
             let receiver = MenuEvent::receiver();
             while let Ok(event) = receiver.recv() {
                 let action = match event.id.0.as_str() {
-                    "show" => TrayAction::Show,
+                    "show" => TrayAction::Show { token: None },
                     "quick_translate" => TrayAction::QuickTranslate,
                     "quick_lookup" => TrayAction::QuickLookup,
                     "quit" => TrayAction::Quit,

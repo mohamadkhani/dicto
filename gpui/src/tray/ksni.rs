@@ -57,7 +57,6 @@ pub(super) fn spawn() -> (mpsc::Receiver<TrayAction>, SharedToken) {
 
 struct DictoTray {
     action_tx: mpsc::Sender<TrayAction>,
-    #[allow(dead_code)]
     token: SharedToken,
 }
 
@@ -115,8 +114,14 @@ impl Tray for DictoTray {
             MenuItem::Standard(StandardItem {
                 label: "Show Dictionary".into(),
                 enabled: true,
-                activate: Box::new(move |_this| {
-                    let _ = tx_show.send(TrayAction::Show);
+                activate: Box::new(move |this| {
+                    // The host delivered the token (if it supports
+                    // ProvideXdgActivationToken) just before this click;
+                    // capture it here so it travels with THIS action (the
+                    // shared slot is drained by translate/lookup at poll
+                    // time and would race a rapid second click).
+                    let token = this.token.lock().ok().and_then(|mut g| g.take());
+                    let _ = tx_show.send(TrayAction::Show { token });
                 }),
                 ..Default::default()
             }),
