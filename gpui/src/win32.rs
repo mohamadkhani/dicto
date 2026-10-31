@@ -32,23 +32,3 @@ pub fn wait_and_dispatch_one() -> bool {
     }
     true
 }
-
-/// Classic GetMessage/Translate/Dispatch loop; runs until
-/// [`wait_and_dispatch_one`] reports the loop should stop.
-pub fn run_message_loop() {
-    while wait_and_dispatch_one() {}
-}
-
-/// Spawn a named thread that runs `setup` (creating windows, icons, etc.)
-/// and then pumps messages for the rest of the process lifetime.
-pub fn spawn_message_thread<F>(name: &str, setup: F) -> std::io::Result<std::thread::JoinHandle<()>>
-where
-    F: FnOnce() + Send + 'static,
-{
-    std::thread::Builder::new()
-        .name(name.to_owned())
-        .spawn(move || {
-            setup();
-            run_message_loop();
-        })
-}

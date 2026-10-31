@@ -426,6 +426,16 @@ impl DictState {
         current.word_lookup_hint_dismissed = self.word_lookup_hint_dismissed;
         current.start_in_tray_hint_dismissed = self.start_in_tray_hint_dismissed;
         let _ = mdict_rs::settings::save(&current);
+
+        // The tray menu shows the quick-translate / lookup items only while
+        // the feature is enabled, labeled with their configured hotkey —
+        // keep it in step with the settings.
+        crate::tray::sync_menu_visibility(
+            self.quick_translate.enabled,
+            self.word_lookup.enabled,
+            &self.quick_translate.hotkey,
+            &self.word_lookup.hotkey,
+        );
     }
 
     /// Stop any active TTS clip that no longer matches the popup's current

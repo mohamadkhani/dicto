@@ -13,13 +13,21 @@ use ksni::{
     menu::{MenuItem, StandardItem},
 };
 
-use super::{SharedToken, TrayAction};
+use super::{MenuRefresh, SharedToken, SharedVisibility, TrayAction};
 
-pub(super) fn spawn() -> (mpsc::Receiver<TrayAction>, SharedToken) {
+pub(super) fn spawn(
+    visibility: SharedVisibility,
+) -> (mpsc::Receiver<TrayAction>, SharedToken, MenuRefresh) {
     let (action_tx, action_rx) = mpsc::channel::<TrayAction>();
     let token: SharedToken = Arc::new(Mutex::new(None));
+    // ksni rebuilds its cached menu only when the service is poked, so a
+    // visibility flip has to wake the tray thread (see the loop below).
+    let (refresh_tx, mut refresh_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let refresh: MenuRefresh = Arc::new(move || {
+        let _ = refresh_tx.send(());
+    });
 
-    let tray = DictoTray::new(action_tx, token.clone());
+    let tray = DictoTray::new(action_tx, token.clone(), visibility);
 
     std::thread::Builder::new()
         .name("ksni-tray".into())
@@ -37,12 +45,16 @@ pub(super) fn spawn() -> (mpsc::Receiver<TrayAction>, SharedToken) {
 
             runtime.block_on(async move {
                 match tray.spawn().await {
-                    Ok(_handle) => {
+                    Ok(handle) => {
                         tracing::info!("tray: ksni service spawned");
-                        // Hold the runtime alive for the lifetime of the
-                        // process. The handle owns the background D-Bus task;
-                        // dropping it would tear down the tray.
-                        std::future::pending::<()>().await;
+                        // The handle owns the background D-Bus task —
+                        // dropping it would tear down the tray — so it lives
+                        // in this loop for the process lifetime. Each
+                        // refresh makes the service re-read `menu()` and
+                        // push the new layout to the host.
+                        while refresh_rx.recv().await.is_some() {
+                            let _ = handle.update(|_| {}).await;
+                        }
                     }
                     Err(e) => {
                         tracing::warn!("tray: ksni spawn failed: {e}");
@@ -52,17 +64,26 @@ pub(super) fn spawn() -> (mpsc::Receiver<TrayAction>, SharedToken) {
         })
         .expect("spawn ksni thread");
 
-    (action_rx, token)
+    (action_rx, token, refresh)
 }
 
 struct DictoTray {
     action_tx: mpsc::Sender<TrayAction>,
     token: SharedToken,
+    visibility: SharedVisibility,
 }
 
 impl DictoTray {
-    fn new(action_tx: mpsc::Sender<TrayAction>, token: SharedToken) -> Self {
-        Self { action_tx, token }
+    fn new(
+        action_tx: mpsc::Sender<TrayAction>,
+        token: SharedToken,
+        visibility: SharedVisibility,
+    ) -> Self {
+        Self {
+            action_tx,
+            token,
+            visibility,
+        }
     }
 }
 
@@ -106,51 +127,67 @@ impl Tray for DictoTray {
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let tx_show = self.action_tx.clone();
-        let tx_translate = self.action_tx.clone();
-        let tx_lookup = self.action_tx.clone();
-        let tx_quit = self.action_tx.clone();
 
-        vec![
-            MenuItem::Standard(StandardItem {
-                label: "Show Dictionary".into(),
-                enabled: true,
-                activate: Box::new(move |this| {
-                    // The host delivered the token (if it supports
-                    // ProvideXdgActivationToken) just before this click;
-                    // capture it here so it travels with THIS action (the
-                    // shared slot is drained by translate/lookup at poll
-                    // time and would race a rapid second click).
-                    let token = this.token.lock().ok().and_then(|mut g| g.take());
-                    let _ = tx_show.send(TrayAction::Show { token });
-                }),
-                ..Default::default()
+        let mut items: Vec<MenuItem<Self>> = vec![MenuItem::Standard(StandardItem {
+            label: "Show Dictionary".into(),
+            enabled: true,
+            activate: Box::new(move |this| {
+                // The host delivered the token (if it supports
+                // ProvideXdgActivationToken) just before this click;
+                // capture it here so it travels with THIS action (the
+                // shared slot is drained by translate/lookup at poll
+                // time and would race a rapid second click).
+                let token = this.token.lock().ok().and_then(|mut g| g.take());
+                let _ = tx_show.send(TrayAction::Show { token });
             }),
-            MenuItem::Standard(StandardItem {
-                label: "Quick Translate".into(),
+            ..Default::default()
+        })];
+
+        // The quick-translate / lookup items exist only while their feature
+        // is enabled (see `sync_menu_visibility`). Their configured hotkey
+        // is appended to the label as a string — GNOME's AppIndicator host
+        // ignores the SNI `shortcut` property entirely, so the label is the
+        // only place every host renders it (display hint only: the global
+        // hotkey backend is what actually fires the action, and we must not
+        // set the shortcut field as well or KDE would show it twice).
+        if self.visibility.quick_translate() {
+            let tx_translate = self.action_tx.clone();
+            let hotkey = self.visibility.translate_hotkey();
+            items.push(MenuItem::Standard(StandardItem {
+                label: labeled("Quick Translate", &hotkey),
                 enabled: true,
                 activate: Box::new(move |_this| {
                     let _ = tx_translate.send(TrayAction::QuickTranslate);
                 }),
                 ..Default::default()
-            }),
-            MenuItem::Standard(StandardItem {
-                label: "Look Up Word".into(),
+            }));
+        }
+        if self.visibility.quick_lookup() {
+            let tx_lookup = self.action_tx.clone();
+            let hotkey = self.visibility.lookup_hotkey();
+            items.push(MenuItem::Standard(StandardItem {
+                label: labeled("Look Up Word", &hotkey),
                 enabled: true,
                 activate: Box::new(move |_this| {
                     let _ = tx_lookup.send(TrayAction::QuickLookup);
                 }),
                 ..Default::default()
+            }));
+        }
+
+        items.push(MenuItem::Separator);
+
+        let tx_quit = self.action_tx.clone();
+        items.push(MenuItem::Standard(StandardItem {
+            label: "Quit".into(),
+            enabled: true,
+            activate: Box::new(move |_this| {
+                let _ = tx_quit.send(TrayAction::Quit);
             }),
-            MenuItem::Separator,
-            MenuItem::Standard(StandardItem {
-                label: "Quit".into(),
-                enabled: true,
-                activate: Box::new(move |_this| {
-                    let _ = tx_quit.send(TrayAction::Quit);
-                }),
-                ..Default::default()
-            }),
-        ]
+            ..Default::default()
+        }));
+
+        items
     }
 }
 
@@ -159,6 +196,18 @@ static TRAY_ICON: std::sync::LazyLock<Icon> = std::sync::LazyLock::new(|| Icon {
     height: super::icon::SIZE as i32,
     data: super::icon::argb(),
 });
+
+/// The item label with the hotkey string appended, e.g.
+/// `"Quick Translate (Ctrl+Alt+D)"` — the same string the settings panel
+/// shows. A blank hotkey leaves the label bare.
+fn labeled(label: &str, hotkey: &str) -> String {
+    let hotkey = hotkey.trim();
+    if hotkey.is_empty() {
+        label.to_owned()
+    } else {
+        format!("{label} ({hotkey})")
+    }
+}
 
 fn dicto_icon() -> Icon {
     TRAY_ICON.clone()
