@@ -1252,6 +1252,7 @@ impl Render for TranslatePopupView {
         let mut root = div()
             .track_focus(&focus)
             .size_full()
+            .font(crate::fonts::persian_fallback_font(window))
             .on_key_down(
                 cx.listener(move |this, ev: &gpui::KeyDownEvent, window, cx| {
                     if ev.keystroke.key == "escape" {

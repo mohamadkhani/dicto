@@ -10,9 +10,33 @@
 
 - **Minimal, native UI** — built on GPUI (the engine behind Zed), renders at 120 fps with no Electron overhead
 - **Instant search** — suggestions appear as you type, results load in milliseconds
+- **Quick Translate** — select text in any app, press `Ctrl+Alt+D`, and a floating popup translates it with your own AI provider and reads it aloud with spoken-word highlighting ([docs/quick-translate.md](docs/quick-translate.md))
+- **Word Lookup** — press `Ctrl+Alt+W` on a word for its dictionary definition in the same popup, with pronunciation audio and related-word suggestions — fully offline
+- **System tray** — start hidden in the tray (`dicto --tray` or "Start in tray at login"); the menu triggers Quick Translate and Word Lookup and shows their hotkeys
+- **Global shortcuts** — hotkeys work system-wide and register themselves with the OS (GNOME shortcuts / XDG portal on Wayland, native global hotkeys on X11 and Windows); rebindable in Settings → General
+- **Single instance** — launching Dicto again raises the running window instead of opening a second copy
 - **Faithful rendering** — full HTML output with per-dictionary CSS so each dict looks exactly as its author intended
 - **Multi-dictionary** — load as many MDX files as you like, enable/disable/reorder them without restarting
 - **Built-in dictionary download** — download dictionaries from within the app (Settings → Download tab, or on first launch)
+
+## Highlights
+
+### Quick Translate
+
+<p align="center"><img src="assets/screenshots/quick-translate.png" alt="Quick Translate popup translating a selected sentence into Persian, with speak and translate controls" width="460"></p>
+
+Select text anywhere — browser, editor, PDF — press `Ctrl+Alt+D`, and Dicto
+pops up over the current window with the translation (any OpenAI-compatible
+provider, any target language) and text-to-speech playback that highlights
+each spoken word as it is read.
+
+### Word Lookup
+
+<p align="center"><img src="assets/screenshots/word-lookup.png" alt="Word Lookup popup showing an offline dictionary definition with related-word suggestions" width="460"></p>
+
+Press `Ctrl+Alt+W` on any word to get its definition from your installed
+dictionaries — offline, with pronunciation audio and related-word
+suggestions.
 
 ## Installation
 
@@ -116,6 +140,15 @@ cargo build --release --package dicto
 Dicto auto-discovers them on next launch. No config editing needed.  
 Enable, disable, and reorder dictionaries from the settings dialog (⚙ button).
 
+## Command line
+
+| Command | Effect |
+| ------- | ------ |
+| `dicto` | Open the dictionary window |
+| `dicto --tray` | Start hidden in the system tray |
+| `dicto --translate` / `-t` | Open Quick Translate for the current selection (Linux — bind to any desktop shortcut) |
+| `dicto --lookup` / `-l` | Open Word Lookup for the current selection (Linux) |
+
 ## Supported formats
 
 | Format | Status |
@@ -127,11 +160,11 @@ Enable, disable, and reorder dictionaries from the settings dialog (⚙ button).
 
 ## Architecture
 
-The workspace has two crates:
+The workspace has four crates:
 
 - **`mdict-rs`** (library) — MDX/MDD parser, redb indexer, query pipeline, settings
 - **`dicto`** (binary) — GPUI desktop app
-
+- **`dicto-translate`** (library) — OpenAI-compatible translation and TTS providers used by Quick Translate
 - **`telemetry`** (library) — opt-in anonymous analytics. Off by default; never transmits what you search for or which dictionaries you import. See [docs/telemetry.md](docs/telemetry.md).
 
 ## References

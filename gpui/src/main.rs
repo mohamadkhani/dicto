@@ -10,6 +10,7 @@ mod catalog;
 mod colors;
 mod components;
 mod download;
+mod fonts;
 mod hotkey;
 mod html;
 mod indexing;
@@ -476,6 +477,7 @@ fn main() {
         .run(move |cx: &mut App| {
             gpui_component::init(cx);
             Theme::change(ThemeMode::Dark, None, cx);
+            Theme::global_mut(cx).font_family = "Vazirmatn".into();
 
             // Start the IPC servers so `dicto --translate` / `dicto --lookup`
             // (e.g. from a GNOME custom keyboard shortcut) can trigger the

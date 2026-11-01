@@ -338,6 +338,7 @@ impl Render for DictApp {
 
         div()
             .size_full()
+            .font(crate::fonts::persian_fallback_font(window))
             .on_key_down(cx.listener(move |_this, event: &KeyDownEvent, window, cx| {
                 let m = &event.keystroke.modifiers;
                 let key = event.keystroke.key.as_str();
