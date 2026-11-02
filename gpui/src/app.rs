@@ -171,8 +171,10 @@ impl DictApp {
         }
 
         // Start periodic polling for quick-translate hotkey events and
-        // tray-menu triggers. Runs every 100ms while the app is alive.
-        spawn_trigger_poll_loop(state.clone(), cx);
+        // tray-menu triggers. The poll loop is owned by the shared
+        // `DictState` (spawned in `main::shared_dict_state`), not by this
+        // view, so it survives the window being closed and reopened and is
+        // never started twice.
 
         // Probe once (GNOME Wayland only) whether the window-calls
         // extension is available; the Quick Translate popup needs it to

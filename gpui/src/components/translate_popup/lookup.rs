@@ -198,9 +198,11 @@ pub(crate) fn lookup_footer(
         .hover(|s| s.bg(colors::border()))
         .child(SharedString::from("Open in Dicto"))
         .on_click(move |_ev, window, cx| {
-            // Move the parsed results into the main window's state, then
-            // tear the popup down through the shared close path. The main
-            // window shows the definition as soon as the popup uncovers it.
+            // Move the parsed results into the shared state, then tear the
+            // popup down and bring the main dictionary window to the front —
+            // reopening it if the user had closed it (tray mode has no window
+            // yet). Both windows share this `DictState`, so the results set
+            // here are exactly what the main window renders.
             let mut results_ready = false;
             state.update(cx, |s, _| {
                 if let Some(wl) = s.word_lookup_engine.as_mut()
@@ -214,6 +216,7 @@ pub(crate) fn lookup_footer(
             });
             if results_ready {
                 super::close_popup(&state, window, cx);
+                crate::open_or_raise_dictionary_window(cx);
             }
         });
 

@@ -459,8 +459,10 @@ Added to `PopupState` (mapped from `crate::word_lookup::LookupState`):
 | `LookupNotFound { word }` | No hits; the footer offers "Translate" (reuses `restart_translation`, so the same window flips to the translate Loading state). |
 
 The lookup footer replaces the Options footer: "Open in Dicto" moves the
-parsed `DictResult`s into the main window's state (`result_word` / `results`)
-and closes the popup; "Translate" is hidden when no AI provider is configured.
+parsed `DictResult`s into the shared main-window state (`result_word` /
+`results`), closes the popup, and raises — reopening if needed — the
+dictionary window so the definition is actually shown; "Translate" is hidden
+when no AI provider is configured.
 
 ### Reused pieces
 

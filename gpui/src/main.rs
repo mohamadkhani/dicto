@@ -143,6 +143,36 @@ fn take_ipc_show_token() -> Option<String> {
 /// stays alive in the tray (`QuitMode::Explicit`).
 static DICT_WINDOW: std::sync::Mutex<Option<gpui::AnyWindowHandle>> = std::sync::Mutex::new(None);
 
+/// The single application `DictState`, shared by the dictionary window and
+/// the Quick Translate / Word Lookup popup. It is created once — headless
+/// under `--tray`, or alongside the first dictionary window — and owned by
+/// this slot so closing the window does not drop it. Both windows must read
+/// the same state for "Open in Dicto" to hand a result to the window that
+/// renders it.
+static DICT_STATE: std::sync::OnceLock<std::sync::Mutex<Option<Entity<DictState>>>> =
+    std::sync::OnceLock::new();
+
+/// Get the shared `DictState`, creating it and its long-lived machinery
+/// (hotkey managers, the popup trigger poll loop, background indexing) on
+/// first use. Idempotent — every later caller (the dictionary window, the
+/// tray "Show", the popup) reuses the same entity, so the popup and the main
+/// window never run on separate states.
+fn shared_dict_state(cx: &mut App) -> Entity<DictState> {
+    let slot = DICT_STATE.get_or_init(|| std::sync::Mutex::new(None));
+    if let Some(state) = slot.lock().ok().and_then(|g| g.clone()) {
+        return state;
+    }
+    let state = cx.new(|_cx| DictState::new());
+    if let Ok(mut g) = slot.lock() {
+        *g = Some(state.clone());
+    }
+    attach_hotkey_managers(&state, cx);
+    watch_popup_window_close(&state, cx);
+    app::spawn_trigger_poll_loop(state.clone(), cx);
+    indexing::spawn(state.clone(), cx);
+    state
+}
+
 /// Path to an IPC socket used by `dicto --translate` / `dicto --lookup` to
 /// signal a running instance. Lives in the user's runtime directory.
 #[cfg(target_os = "linux")]
@@ -630,6 +660,15 @@ fn raise_dictionary_window(token: Option<String>, cx: &mut App) {
     }
 }
 
+/// Bring the dictionary window to the front from an in-app action (the
+/// lookup popup's "Open in Dicto"): raise it if it is open, otherwise reopen
+/// it. Unlike the tray / IPC paths there is no compositor-minted activation
+/// token — the click happens inside our own app, so the plain platform raise
+/// is enough.
+pub(crate) fn open_or_raise_dictionary_window(cx: &mut App) {
+    raise_dictionary_window(None, cx);
+}
+
 /// Attach hotkey managers built off the UI thread to the state's
 /// engines. The XDG portal backend blocks up to `BIND_SETTLE_TIMEOUT`
 /// (3s) waiting for its first bind to settle, so callers run this after
@@ -742,25 +781,24 @@ fn watch_popup_window_close(state: &Entity<DictState>, cx: &mut App) {
 }
 
 /// Start the app machinery without showing the main window (`--tray`).
-/// Same wiring `open_dictionary_window` wraps around the window: state +
-/// engines (which register the OS-level shortcuts in `DictState::new`),
-/// hotkey-manager registration, the trigger poll loop, popup housekeeping,
-/// and background indexing. The tray's "Show Dictionary" (or a second
-/// plain launch) later opens the window via `raise_dictionary_window`.
+/// Creates the shared `DictState` and its long-lived machinery (hotkey
+/// managers, popup housekeeping, the trigger poll loop, background
+/// indexing). The tray's "Show Dictionary" (or a second plain launch, or the
+/// popup's "Open in Dicto") later opens the window on that same state via
+/// [`raise_dictionary_window`].
 fn start_background_machinery(cx: &mut App) {
-    let state = cx.new(|_cx| DictState::new());
-    attach_hotkey_managers(&state, cx);
-    watch_popup_window_close(&state, cx);
-    app::spawn_trigger_poll_loop(state.clone(), cx);
-    indexing::spawn(state, cx);
+    shared_dict_state(cx);
 }
 
 fn open_dictionary_window(cx: &mut App) {
     dicto_telemetry::get().track(dicto_telemetry::Event::WindowOpened);
     let bounds = Bounds::centered(None, size(px(920.), px(680.)), cx);
 
-    let state_for_indexing: std::cell::RefCell<Option<gpui::Entity<DictState>>> =
-        std::cell::RefCell::new(None);
+    // Reuse the shared state so the window renders whatever the popup's
+    // "Open in Dicto" already moved into it. `shared_dict_state` wires the
+    // machinery exactly once, so a reopen after the user closed the window
+    // does not spawn a second poll loop / hotkey registration.
+    let state_for_view = shared_dict_state(cx);
 
     let handle: gpui::AnyWindowHandle = cx
         .open_window(
@@ -777,10 +815,8 @@ fn open_dictionary_window(cx: &mut App) {
                 app_id: Some("dicto".into()),
                 ..Default::default()
             },
-            |window, cx| {
-                let state = cx.new(|_cx| DictState::new());
-                *state_for_indexing.borrow_mut() = Some(state.clone());
-                let view = cx.new(|cx| DictApp::new(state, window, cx));
+            move |window, cx| {
+                let view = cx.new(|cx| DictApp::new(state_for_view.clone(), window, cx));
                 cx.new(|cx| Root::new(view, window, cx))
             },
         )
@@ -790,11 +826,5 @@ fn open_dictionary_window(cx: &mut App) {
     // this exact window (`cx.windows()` would also match popups).
     if let Ok(mut g) = DICT_WINDOW.lock() {
         *g = Some(handle);
-    }
-
-    if let Some(state) = state_for_indexing.into_inner() {
-        attach_hotkey_managers(&state, cx);
-        watch_popup_window_close(&state, cx);
-        indexing::spawn(state, cx);
     }
 }
