@@ -32,7 +32,8 @@ pub fn lookup_resource(path: &str) -> Option<Vec<u8>> {
     registry::lookup_resource(path)
 }
 
-/// CSS stylesheets from the dictionary named `dict_name`.
-pub fn css_for_dict(dict_name: &str) -> Vec<(String, String)> {
-    registry::css_for_dict(dict_name)
+/// CSS stylesheets from the dictionary identified by file stem (display
+/// name also accepted). `DictHit.stem` is the canonical key.
+pub fn css_for_dict(stem: &str) -> Vec<(String, String)> {
+    registry::css_for_dict(stem)
 }

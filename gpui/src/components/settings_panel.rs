@@ -528,6 +528,7 @@ pub fn apply_save(state: &Entity<DictState>, cx: &mut gpui::App) {
                 }
             }
             mdict_rs::registry::reload();
+            crate::indexing::load_stylesheets();
             info!("settings: background reindex complete");
         })
         .detach();

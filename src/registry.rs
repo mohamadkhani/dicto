@@ -103,10 +103,10 @@ impl DictionaryRegistry {
         self.dictionaries.iter().find_map(|d| d.resource(path))
     }
 
-    pub fn css_for_dict(&self, name: &str) -> Vec<(String, String)> {
+    pub fn css_for_dict(&self, stem: &str) -> Vec<(String, String)> {
         self.dictionaries
             .iter()
-            .find(|d| d.name() == name)
+            .find(|d| d.stem() == stem || d.name() == stem)
             .map(|d| d.css_resources())
             .unwrap_or_default()
     }
@@ -114,7 +114,7 @@ impl DictionaryRegistry {
     pub fn all_css(&self) -> Vec<(String, Vec<(String, String)>)> {
         self.dictionaries
             .iter()
-            .map(|d| (d.name().to_string(), d.css_resources()))
+            .map(|d| (d.stem().to_string(), d.css_resources()))
             .collect()
     }
 }
@@ -151,8 +151,8 @@ pub fn lookup_resource(path: &str) -> Option<Vec<u8>> {
     REGISTRY.read().unwrap().lookup_resource(path)
 }
 
-pub fn css_for_dict(name: &str) -> Vec<(String, String)> {
-    REGISTRY.read().unwrap().css_for_dict(name)
+pub fn css_for_dict(stem: &str) -> Vec<(String, String)> {
+    REGISTRY.read().unwrap().css_for_dict(stem)
 }
 
 pub fn all_css() -> Vec<(String, Vec<(String, String)>)> {
