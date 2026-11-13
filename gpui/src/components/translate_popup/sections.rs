@@ -215,17 +215,25 @@ pub(crate) fn translate_button(
             }
             let original = original.clone();
             let state = state.clone();
-            cx.update_entity(&state, |s, cx| {
+            // Capture the job and its generation INSIDE the update, then
+            // spawn OUTSIDE it. Keeping the read of the entity out of the
+            // update is what avoids GPUI's "cannot read DictState while it
+            // is already being updated" panic — the write lease held by
+            // `update_entity` forbids any read of the same entity.
+            let started = cx.update_entity(&state, |s, cx| {
                 // Bump the generation so an older in-flight translation can
                 // never overwrite this run's result.
                 s.begin_popup_mode(crate::state::QuickPopupMode::Translate);
-                if let Some(engine) = s.quick_translate_engine.as_mut() {
-                    if let Some(job) = engine.restart_translation(original) {
-                        spawn_translation(job, state.clone(), cx);
-                    }
-                    cx.notify();
-                }
+                let job = s
+                    .quick_translate_engine
+                    .as_mut()
+                    .and_then(|engine| engine.restart_translation(original));
+                cx.notify();
+                job.map(|job| (job, s.qt_popup_generation))
             });
+            if let Some((job, generation)) = started {
+                spawn_translation(job, generation, state, cx);
+            }
         })
         .into_any_element()
 }
@@ -251,12 +259,20 @@ fn source_voice_lang() -> String {
 /// Run a `TranslationJob` on the background executor and feed its outcome back
 /// into the engine, then notify the popup to re-render. Mirrors the poll loop's
 /// spawn in app.rs. Also used by the lookup popup's "Translate" fallback.
+///
+/// `generation` must be captured at the moment the job was started (from the
+/// same update that called `begin_popup_mode`), so the late result can be
+/// dropped after a mode switch or a newer trigger. It is passed in rather than
+/// read here: this function must be callable from click handlers, and reading
+/// the entity there would panic if the caller were still inside
+/// `update_entity` (GPUI does not allow a read while the entity is leased for
+/// writing).
 pub(crate) fn spawn_translation(
     job: crate::quick_translate::TranslationJob,
+    generation: u64,
     entity: Entity<DictState>,
     cx: &mut gpui::App,
 ) {
-    let generation = entity.read(cx).qt_popup_generation;
     cx.spawn(async move |cx| {
         let outcome = cx
             .background_executor()

@@ -140,15 +140,17 @@ fn enable_row(state: Entity<DictState>) -> gpui::AnyElement {
             });
             // Re-run the lookup now that the feature is on. The engine
             // exists unconditionally, so this can't fail to find it.
-            let job = state.update(cx, |s, _cx| {
+            let started = state.update(cx, |s, _cx| {
                 // Only re-runs when a selection is actually readable;
                 // otherwise the engine shows its read-failure hint.
-                s.word_lookup_engine
+                let job = s
+                    .word_lookup_engine
                     .as_mut()
-                    .and_then(|wl| wl.trigger_lookup())
+                    .and_then(|wl| wl.trigger_lookup());
+                job.map(|job| (job, s.qt_popup_generation))
             });
-            if let Some(job) = job {
-                spawn_lookup(job, state, cx);
+            if let Some((job, generation)) = started {
+                spawn_lookup(job, generation, state, cx);
             }
         })
         .into_any_element()
@@ -156,8 +158,12 @@ fn enable_row(state: Entity<DictState>) -> gpui::AnyElement {
 
 /// Run a `LookupJob` on the background executor and feed the outcome back
 /// into the engine. Lookup-side twin of `sections::spawn_translation`.
-fn spawn_lookup(job: crate::word_lookup::LookupJob, entity: Entity<DictState>, cx: &mut gpui::App) {
-    let generation = entity.read(cx).qt_popup_generation;
+fn spawn_lookup(
+    job: crate::word_lookup::LookupJob,
+    generation: u64,
+    entity: Entity<DictState>,
+    cx: &mut gpui::App,
+) {
     cx.spawn(async move |cx| {
         let outcome = cx
             .background_executor()
@@ -438,16 +444,18 @@ fn related_words_row(
                 .max_w(px(160.))
                 .child(SharedString::from(word.clone()))
                 .on_click(move |_ev, _window, cx| {
-                    let job = state.update(cx, |s, _cx| {
+                    let started = state.update(cx, |s, _cx| {
                         // Bump the generation so an older in-flight lookup
                         // cannot overwrite this newer word's results.
                         s.begin_popup_mode(crate::state::QuickPopupMode::Lookup);
-                        s.word_lookup_engine
+                        let job = s
+                            .word_lookup_engine
                             .as_mut()
-                            .map(|wl| wl.lookup_text(word.clone()))
+                            .map(|wl| wl.lookup_text(word.clone()));
+                        job.map(|job| (job, s.qt_popup_generation))
                     });
-                    if let Some(job) = job {
-                        spawn_lookup(job, state.clone(), cx);
+                    if let Some((job, generation)) = started {
+                        spawn_lookup(job, generation, state.clone(), cx);
                     }
                 })
         })
@@ -511,13 +519,18 @@ fn translate_word_from_lookup(state_entity: &Entity<DictState>, cx: &mut gpui::A
     let Some(word) = word else {
         return;
     };
-    cx.update_entity(state_entity, |s, cx| {
+    // Same shape as the Translate button: build the job inside the update,
+    // spawn it after the entity lease is released (see `spawn_translation`).
+    let started = cx.update_entity(state_entity, |s, cx| {
         s.begin_popup_mode(crate::state::QuickPopupMode::Translate);
-        if let Some(qt) = s.quick_translate_engine.as_mut()
-            && let Some(job) = qt.restart_translation(word)
-        {
-            spawn_translation(job, state_entity.clone(), cx);
-        }
+        let job = s
+            .quick_translate_engine
+            .as_mut()
+            .and_then(|qt| qt.restart_translation(word));
         cx.notify();
+        job.map(|job| (job, s.qt_popup_generation))
     });
+    if let Some((job, generation)) = started {
+        spawn_translation(job, generation, state_entity.clone(), cx);
+    }
 }
