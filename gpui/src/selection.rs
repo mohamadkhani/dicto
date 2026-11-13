@@ -40,6 +40,58 @@ pub enum SelectionError {
 /// Maximum selection length we'll process.
 pub const MAX_SELECTION_LENGTH: usize = 10_000;
 
+/// Remove annoying characters from a selection before moving it to the
+/// quick-translate text area: collapse runs of internal whitespace
+/// (spaces, tabs, newlines) into a single space, trim the result, and strip
+/// symbols / emoji / other non-text characters that would confuse
+/// translation or TTS.
+fn clean_selection(text: &str) -> String {
+    let mut cleaned = text
+        .split_whitespace()
+        .map(fix_word)
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    // Drop any remaining non-text tokens (emojis, symbols, lone punctuation).
+    cleaned = cleaned
+        .split(' ')
+        .filter(|w| is_text_word(w))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    cleaned
+}
+
+/// Fix common characters inside a word that break translation / TTS.
+fn fix_word(w: &str) -> String {
+    w.replace("…", "...")
+        .replace("–", "-")
+        .replace("—", "-")
+        .replace("‘", "'")
+        .replace("’", "'")
+        .replace("“", "\"")
+        .replace("”", "\"")
+        .replace("«", "\"")
+        .replace("»", "\"")
+        .replace("•", "")
+}
+
+/// Keep words that contain at least one letter/digit, or are punctuation
+/// only (kept so ellipses/dashes survive). Symbols and emoji are still
+/// dropped.
+fn is_text_word(w: &str) -> bool {
+    if w.is_empty() {
+        return false;
+    }
+    if w.chars().any(|c| c.is_alphanumeric()) {
+        return true;
+    }
+    // Pure punctuation: keep if it contains chars that belong to words
+    // (quotes, dots, dashes), drop lone standalone symbols like ★.
+    w.chars()
+        .any(|c| matches!(c, '.' | '\'' | '"' | '-' | '–' | '—'))
+}
+
 /// Read the currently selected text.
 ///
 /// Tries primary selection first, then falls back to the regular clipboard.
@@ -53,17 +105,17 @@ pub fn read_selected_text() -> Result<(String, SelectionSource), SelectionError>
     // Try primary selection first.
     match read_primary() {
         Ok(text) if !text.trim().is_empty() => {
-            let trimmed = text.trim().to_string();
-            if trimmed.len() > MAX_SELECTION_LENGTH {
-                return Err(SelectionError::TooLong(trimmed));
+            let cleaned = clean_selection(&text);
+            if cleaned.len() > MAX_SELECTION_LENGTH {
+                return Err(SelectionError::TooLong(cleaned));
             }
             debug!(
                 source = "primary",
-                len = trimmed.len(),
+                len = cleaned.len(),
                 elapsed_ms = start.elapsed().as_millis(),
                 "read selection"
             );
-            return Ok((trimmed, SelectionSource::Primary));
+            return Ok((cleaned, SelectionSource::Primary));
         }
         Ok(_) => {
             debug!("primary selection is empty, trying clipboard");
@@ -75,21 +127,21 @@ pub fn read_selected_text() -> Result<(String, SelectionSource), SelectionError>
 
     // Fall back to regular clipboard.
     let text = read_clipboard()?;
-    let trimmed = text.trim().to_string();
-    if trimmed.is_empty() {
+    let cleaned = clean_selection(&text);
+    if cleaned.is_empty() {
         return Err(SelectionError::Empty);
     }
-    if trimmed.len() > MAX_SELECTION_LENGTH {
-        return Err(SelectionError::TooLong(trimmed));
+    if cleaned.len() > MAX_SELECTION_LENGTH {
+        return Err(SelectionError::TooLong(cleaned));
     }
 
     debug!(
         source = "clipboard",
-        len = trimmed.len(),
+        len = cleaned.len(),
         elapsed_ms = start.elapsed().as_millis(),
         "read selection"
     );
-    Ok((trimmed, SelectionSource::Clipboard))
+    Ok((cleaned, SelectionSource::Clipboard))
 }
 
 /// Returns true if the text looks like a single word (no whitespace, not too long).
@@ -151,5 +203,61 @@ mod tests {
         // Very long single word is not considered a word
         let long = "a".repeat(101);
         assert!(!is_single_word(&long));
+    }
+
+    #[test]
+    fn test_clean_selection() {
+        assert_eq!(clean_selection("hello"), "hello");
+        // Multiple spaces / tabs collapsed
+        assert_eq!(clean_selection("hello   world"), "hello world");
+        assert_eq!(clean_selection("hello\t\tworld"), "hello world");
+        // Newlines replaced with single spaces
+        assert_eq!(clean_selection("hello\nworld"), "hello world");
+        assert_eq!(clean_selection("hello\r\nworld"), "hello world");
+        // Ellipsis and dashes normalized
+        assert_eq!(clean_selection("Hello … world"), "Hello ... world");
+        assert_eq!(clean_selection("Hello — world"), "Hello - world");
+        assert_eq!(clean_selection("Hello – world"), "Hello - world");
+        // Smart quotes normalized
+        assert_eq!(clean_selection("Hello 'world'"), "Hello 'world'");
+        assert_eq!(clean_selection("Hello \"world\""), "Hello \"world\"");
+        // Emoji / symbols removed, bullets removed
+        assert_eq!(clean_selection("Hello 👍 world"), "Hello world");
+        assert_eq!(clean_selection("• item one • item two"), "item one item two");
+        // Lone symbols removed entirely
+        assert_eq!(clean_selection("Hello ⚠"), "Hello");
+        assert_eq!(clean_selection("★★★ Hello"), "Hello");
+        // Leading/trailing whitespace trimmed
+        assert_eq!(clean_selection("  hello world  "), "hello world");
+        // Persian (Farsi) text is preserved as readable words
+        assert_eq!(
+            clean_selection("سلام دنیا"),
+            "سلام دنیا"
+        );
+        // Persian mixed with English works
+        assert_eq!(
+            clean_selection("Hello سلام دنیا"),
+            "Hello سلام دنیا"
+        );
+        // Persian with line breaks collapsed
+        assert_eq!(
+            clean_selection("سلام\nدنیا\nخوبی"),
+            "سلام دنیا خوبی"
+        );
+        // Persian with ellipsis/dash normalized
+        assert_eq!(
+            clean_selection("کتاب … داستان — خوب"),
+            "کتاب ... داستان - خوب"
+        );
+        // Persian with emoji removed
+        assert_eq!(
+            clean_selection("کتاب 👍 داستان"),
+            "کتاب داستان"
+        );
+        // Persian smart quotes normalized
+        assert_eq!(
+            clean_selection("«کتاب»"),
+            "\"کتاب\""
+        );
     }
 }
