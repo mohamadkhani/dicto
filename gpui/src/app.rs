@@ -387,11 +387,7 @@ fn open_translate_popup(state: &Entity<DictState>, cx: &mut gpui::App) -> anyhow
     // shape — opening at the exact size means no resize after the first
     // paint, which used to land inside GNOME's open animation and read as a
     // janky, slow open. Falls back to the constant-based estimate.
-    let status = state
-        .read(cx)
-        .quick_translate_engine
-        .as_ref()
-        .map(|e| e.popup_status().clone());
+    let status = crate::components::translate_popup::display_status(state.read(cx));
     let shape_key = crate::components::translate_popup::shape_fingerprint(state.read(cx));
     let initial_height = crate::components::translate_popup::cached_shape_height(&shape_key)
         .unwrap_or_else(|| {
@@ -565,25 +561,33 @@ pub fn spawn_trigger_poll_loop(state: Entity<DictState>, cx: &mut gpui::App) {
                         .unwrap_or(false);
                     if is_word && lookup_enabled {
                         if let Some((text, _)) = selection {
+                            s.begin_popup_mode(crate::state::QuickPopupMode::Lookup);
                             lookup_job =
                                 Some(s.word_lookup_engine.as_mut().unwrap().lookup_text(text));
                         }
-                    } else if let Some(engine) = s.quick_translate_engine.as_mut() {
-                        engine.trigger_translate();
-                        translate_now = true;
+                    } else if s.quick_translate_engine.is_some() {
+                        s.begin_popup_mode(crate::state::QuickPopupMode::Translate);
+                        if let Some(engine) = s.quick_translate_engine.as_mut() {
+                            engine.trigger_translate();
+                            translate_now = true;
+                        }
                     }
                 }
 
                 if wl_fired || tray_lookup {
                     // The engine handles the disabled case itself — the
                     // popup shows an enable hint instead of a lookup.
-                    if let Some(engine) = s.word_lookup_engine.as_mut() {
-                        lookup_job = engine.trigger_lookup();
+                    if s.word_lookup_engine.is_some() {
+                        s.begin_popup_mode(crate::state::QuickPopupMode::Lookup);
+                        lookup_job = s.word_lookup_engine.as_mut().unwrap().trigger_lookup();
                     }
                 } else if tray_translate {
                     // Tray "Quick Translate" is always a plain translate.
-                    if let Some(engine) = s.quick_translate_engine.as_mut() {
-                        if !qt_fired {
+                    if s.quick_translate_engine.is_some() {
+                        s.begin_popup_mode(crate::state::QuickPopupMode::Translate);
+                        if let Some(engine) = s.quick_translate_engine.as_mut()
+                            && !qt_fired
+                        {
                             engine.trigger_translate();
                             translate_now = true;
                         }
@@ -634,12 +638,27 @@ pub fn spawn_trigger_poll_loop(state: Entity<DictState>, cx: &mut gpui::App) {
             // UI thread. The outcome flips the popup to Ready/NotFound.
             if let Some(job) = lookup_job {
                 let job_state = poll_state.clone();
+                let job_generation = cx.read_entity(&poll_state, |s, _cx| s.qt_popup_generation);
                 cx.spawn(async move |cx| {
                     let outcome = cx
                         .background_executor()
                         .spawn(async move { job.run() })
                         .await;
                     cx.update_entity(&job_state, |s, cx| {
+                        // The user may have switched to translate (or fired a
+                        // newer lookup) while the query ran. Its result is
+                        // stale then — applying it would resurrect the old
+                        // popup mode over the new one.
+                        if !s.popup_job_is_current(
+                            job_generation,
+                            crate::state::QuickPopupMode::Lookup,
+                        ) {
+                            tracing::debug!(
+                                generation = job_generation,
+                                "discarding stale word-lookup result"
+                            );
+                            return;
+                        }
                         if let Some(engine) = s.word_lookup_engine.as_mut() {
                             engine.apply_result(outcome);
                         }
@@ -649,23 +668,16 @@ pub fn spawn_trigger_poll_loop(state: Entity<DictState>, cx: &mut gpui::App) {
                 .detach();
             }
 
-            // The popup is open whenever either engine's status is
-            // Visible (translate and lookup share one popup window).
+            // The popup is open whenever the ACTIVE mode's engine has
+            // visible content (translate and lookup share one popup
+            // window; `qt_popup_mode` decides which one owns it).
             // Reopen it whenever it is visible but has no window — this
             // both opens the first time AND replaces the window after a
             // tokenless re-trigger closed it on the previous tick (the
             // tick gap lets GPUI finish tearing the old surface down;
             // removing + opening in one tick leaves the new window
             // unpainted/black).
-            let popup_visible = cx.read_entity(&poll_state, |s, _cx| {
-                matches!(
-                    s.quick_translate_engine.as_ref().map(|e| e.popup_status()),
-                    Some(crate::quick_translate::PopupStatus::Visible(_))
-                ) || s
-                    .word_lookup_engine
-                    .as_ref()
-                    .is_some_and(crate::word_lookup::WordLookupEngine::is_visible)
-            });
+            let popup_visible = cx.read_entity(&poll_state, |s, _cx| s.popup_visible());
             let has_window = cx.read_entity(&poll_state, |s, _cx| s.qt_popup_window.is_some());
             // True while a tokenless re-trigger has closed the window and
             // is waiting for its reopen tick (the window-closed observer

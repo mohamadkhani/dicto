@@ -149,75 +149,114 @@ pub(crate) fn remember_shape_height(key: &str, height: f32) {
         .insert(key.to_string(), height);
 }
 
+/// The popup content the ACTIVE mode currently wants to show.
+///
+/// The translate and lookup engines keep independent `Visible` states, so
+/// "whichever engine is visible" is not enough to pick the content: after a
+/// mode switch the previous engine can still be visible until its state is
+/// cleared. `qt_popup_mode` is the authoritative owner; a stale visible
+/// state in the other engine is ignored.
+pub(crate) fn display_status(state: &DictState) -> Option<crate::quick_translate::PopupStatus> {
+    use crate::word_lookup::LookupStatus;
+
+    let translate = state
+        .quick_translate_engine
+        .as_ref()
+        .map(|e| e.popup_status());
+    let lookup = state
+        .word_lookup_engine
+        .as_ref()
+        .and_then(|w| match w.status() {
+            LookupStatus::Visible(s) => Some(s),
+            LookupStatus::Hidden => None,
+        });
+    select_display_state(state.qt_popup_mode, translate, lookup)
+}
+
+/// Pure mode-selection step, separated so the "previous mode must not win"
+/// rule is unit-testable without building a whole `DictState`.
+fn select_display_state(
+    mode: Option<crate::state::QuickPopupMode>,
+    translate: Option<&crate::quick_translate::PopupStatus>,
+    lookup: Option<&crate::word_lookup::LookupState>,
+) -> Option<crate::quick_translate::PopupStatus> {
+    use crate::state::QuickPopupMode;
+
+    match mode? {
+        QuickPopupMode::Translate => translate.cloned(),
+        QuickPopupMode::Lookup => {
+            lookup.map(|s| crate::quick_translate::PopupStatus::Visible(lookup_state_to_popup(s)))
+        }
+    }
+}
+
+/// Map the lookup engine's state onto the popup's shared `PopupState` type.
+fn lookup_state_to_popup(state: &crate::word_lookup::LookupState) -> PopupState {
+    use crate::word_lookup::LookupState;
+
+    match state {
+        LookupState::Loading { word } => PopupState::LookupLoading { word: word.clone() },
+        LookupState::Ready {
+            word,
+            results,
+            active,
+            related,
+        } => PopupState::LookupReady {
+            word: word.clone(),
+            results: results.clone(),
+            active: *active,
+            related: related.clone(),
+        },
+        LookupState::NotFound { word, related } => PopupState::LookupNotFound {
+            word: word.clone(),
+            related: related.clone(),
+        },
+        LookupState::Disabled => PopupState::LookupDisabled,
+        LookupState::Error { message } => PopupState::LookupError {
+            message: message.clone(),
+        },
+    }
+}
+
 /// A stable-enough key for "content that should render at the same natural
 /// height": popup kind + word length + dictionary/tab count.
 pub(crate) fn shape_fingerprint(state: &DictState) -> String {
-    if let Some(crate::quick_translate::PopupStatus::Visible(ps)) = state
-        .quick_translate_engine
-        .as_ref()
-        .map(|e| e.popup_status())
-    {
-        return match ps {
-            PopupState::Ready {
-                original,
-                translation,
-                ..
-            } => format!("qt-ready-{}-{}", original.len(), translation.len()),
-            PopupState::Loading { original } => format!("qt-loading-{}", original.len()),
-            PopupState::Error { original, .. } => format!("qt-error-{}", original.len()),
-            PopupState::TooLong { original } => format!("qt-toolong-{}", original.len()),
-            PopupState::Idle { original } => format!("qt-idle-{}", original.len()),
-            PopupState::LookupLoading { word } => format!("wl-loading-{}", word.chars().count()),
-            PopupState::LookupReady {
-                word,
-                results,
-                active,
-                related,
-            } => format!(
-                "wl-ready-{}-{}-{}-{}",
-                word.chars().count(),
-                results.len(),
-                active,
-                related.len()
-            ),
-            PopupState::LookupNotFound { word, related } => {
-                format!("wl-notfound-{}-{}", word.chars().count(), related.len())
-            }
-            PopupState::LookupDisabled => "wl-disabled".into(),
-            PopupState::LookupError { .. } => "wl-error".into(),
-        };
+    match display_status(state) {
+        Some(crate::quick_translate::PopupStatus::Visible(ps)) => shape_fingerprint_of(&ps),
+        _ => "idle".into(),
     }
-    if let Some(wl) = state.word_lookup_engine.as_ref() {
-        use crate::word_lookup::LookupState;
-        return match wl.status() {
-            crate::word_lookup::LookupStatus::Visible(LookupState::Ready {
-                word,
-                results,
-                active,
-                related,
-            }) => format!(
-                "wl-ready-{}-{}-{}-{}",
-                word.chars().count(),
-                results.len(),
-                active,
-                related.len()
-            ),
-            crate::word_lookup::LookupStatus::Visible(LookupState::Loading { word }) => {
-                format!("wl-loading-{}", word.chars().count())
-            }
-            crate::word_lookup::LookupStatus::Visible(LookupState::NotFound { word, related }) => {
-                format!("wl-notfound-{}-{}", word.chars().count(), related.len())
-            }
-            crate::word_lookup::LookupStatus::Visible(LookupState::Disabled) => {
-                "wl-disabled".into()
-            }
-            crate::word_lookup::LookupStatus::Visible(LookupState::Error { .. }) => {
-                "wl-error".into()
-            }
-            crate::word_lookup::LookupStatus::Hidden => "hidden".into(),
-        };
+}
+
+fn shape_fingerprint_of(ps: &PopupState) -> String {
+    match ps {
+        PopupState::Ready {
+            original,
+            translation,
+            ..
+        } => format!("qt-ready-{}-{}", original.len(), translation.len()),
+        PopupState::Loading { original } => format!("qt-loading-{}", original.len()),
+        PopupState::Error { original, .. } => format!("qt-error-{}", original.len()),
+        PopupState::TooLong { original } => format!("qt-toolong-{}", original.len()),
+        PopupState::Idle { original } => format!("qt-idle-{}", original.len()),
+        PopupState::LookupLoading { word } => format!("wl-loading-{}", word.chars().count()),
+        PopupState::LookupReady {
+            word,
+            results,
+            active,
+            related,
+        } => format!(
+            "wl-ready-{}-{}-{}-{}",
+            word.chars().count(),
+            results.len(),
+            active,
+            related.len()
+        ),
+        PopupState::LookupNotFound { word, related } => {
+            format!("wl-notfound-{}-{}", word.chars().count(), related.len())
+        }
+        PopupState::LookupDisabled => "wl-disabled".into(),
+        PopupState::LookupError { .. } => "wl-error".into(),
     }
-    "idle".into()
 }
 
 pub(crate) fn estimated_window_height(state: Option<&PopupState>) -> f32 {
@@ -1105,55 +1144,13 @@ impl Render for TranslatePopupView {
 
         // Read the popup state out of DictState (cloned so the borrow ends
         // before we pass cx). The Word Lookup engine and the translate
-        // engine share the window — the lookup status wins when visible.
-        // Lookup states are mapped onto their PopupState twins so the rest
-        // of the view stays mode-agnostic. Settings come from the shared
-        // snapshot (TTS config is used by both modes).
-        let status: Option<crate::quick_translate::PopupStatus> = {
-            let st = self.state.read(cx);
-            if let Some(wl) = st.word_lookup_engine.as_ref().filter(|w| w.is_visible()) {
-                use crate::word_lookup::LookupState;
-                let ps = match wl.status() {
-                    crate::word_lookup::LookupStatus::Visible(LookupState::Loading { word }) => {
-                        PopupState::LookupLoading { word: word.clone() }
-                    }
-                    crate::word_lookup::LookupStatus::Visible(LookupState::Ready {
-                        word,
-                        results,
-                        active,
-                        related,
-                    }) => PopupState::LookupReady {
-                        word: word.clone(),
-                        results: results.clone(),
-                        active: *active,
-                        related: related.clone(),
-                    },
-                    crate::word_lookup::LookupStatus::Visible(LookupState::NotFound {
-                        word,
-                        related,
-                    }) => PopupState::LookupNotFound {
-                        word: word.clone(),
-                        related: related.clone(),
-                    },
-                    crate::word_lookup::LookupStatus::Visible(LookupState::Disabled) => {
-                        PopupState::LookupDisabled
-                    }
-                    crate::word_lookup::LookupStatus::Visible(LookupState::Error { message }) => {
-                        PopupState::LookupError {
-                            message: message.clone(),
-                        }
-                    }
-                    crate::word_lookup::LookupStatus::Hidden => PopupState::LookupLoading {
-                        word: String::new(),
-                    },
-                };
-                Some(crate::quick_translate::PopupStatus::Visible(ps))
-            } else {
-                st.quick_translate_engine
-                    .as_ref()
-                    .map(|e| e.popup_status().clone())
-            }
-        };
+        // engine share the window; `qt_popup_mode` names the active owner,
+        // so a stale `Visible` state in the mode the user just left can
+        // never win the render. Lookup states are mapped onto their
+        // `PopupState` twins so the rest of the view stays mode-agnostic.
+        // Settings come from the shared snapshot (TTS config is used by
+        // both modes).
+        let status = display_status(self.state.read(cx));
         let (settings, options_open, pb_src, pb_tr, hl_src, hl_tr) = {
             let st = self.state.read(cx);
             (
@@ -1330,9 +1327,72 @@ pub(crate) fn close_popup(state: &Entity<DictState>, window: &mut Window, cx: &m
         s.playback_source.stop();
         s.playback_translation.stop();
         s.qt_popup_window = None;
-        // A user dismissal cancels any in-flight programmatic replace.
+        // A user dismissal cancels any in-flight programmatic replace, and
+        // clears the mode owner so a late job result cannot reopen the popup.
         s.qt_replace_pending = false;
+        s.qt_popup_mode = None;
         cx.notify();
     });
     window.remove_window();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::quick_translate::PopupStatus;
+    use crate::state::QuickPopupMode;
+    use crate::word_lookup::LookupState;
+
+    fn translate_idle(text: &str) -> PopupStatus {
+        PopupStatus::Visible(PopupState::Idle {
+            original: text.to_string(),
+        })
+    }
+
+    /// Regression lock: a lookup popup left open used to keep the render on
+    /// lookup after translate was triggered, because "lookup is visible"
+    /// beat the newly triggered translate state.
+    #[test]
+    fn translate_mode_wins_over_a_still_visible_lookup() {
+        let translate = translate_idle("hello world");
+        let lookup = LookupState::Loading {
+            word: "hello".into(),
+        };
+
+        let shown = select_display_state(
+            Some(QuickPopupMode::Translate),
+            Some(&translate),
+            Some(&lookup),
+        );
+        assert!(matches!(
+            shown,
+            Some(PopupStatus::Visible(PopupState::Idle { .. }))
+        ));
+    }
+
+    #[test]
+    fn lookup_mode_renders_the_lookup_state() {
+        let translate = translate_idle("hello world");
+        let lookup = LookupState::NotFound {
+            word: "hello".into(),
+            related: vec!["help".into()],
+        };
+
+        let shown = select_display_state(
+            Some(QuickPopupMode::Lookup),
+            Some(&translate),
+            Some(&lookup),
+        );
+        assert!(matches!(
+            shown,
+            Some(PopupStatus::Visible(PopupState::LookupNotFound { .. }))
+        ));
+    }
+
+    #[test]
+    fn closed_popup_renders_nothing_even_with_visible_engines() {
+        let translate = translate_idle("hello");
+        let lookup = LookupState::Disabled;
+        assert!(select_display_state(None, Some(&translate), Some(&lookup)).is_none());
+    }
 }

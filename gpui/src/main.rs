@@ -758,6 +758,11 @@ fn watch_popup_window_close(state: &Entity<DictState>, cx: &mut App) {
                 // reopen a fresh one on the next poll tick — the popup
                 // state (and its new selection) must survive.
                 let replace_pending = s.qt_replace_pending;
+                if !replace_pending {
+                    // The popup is gone for good (WM close / Alt+F4): clear
+                    // the mode owner so late job results cannot reopen it.
+                    s.qt_popup_mode = None;
+                }
                 if let Some(engine) = s.quick_translate_engine.as_mut()
                     && !replace_pending
                 {

@@ -43,6 +43,18 @@ pub enum CatalogState {
     Error(String),
 }
 
+/// Which engine currently owns the shared Quick popup window.
+///
+/// The translate and lookup engines each carry their own `Visible` state, so
+/// the popup cannot infer the mode from "whichever is visible" — a previous
+/// mode can still be visible when a new trigger arrives. This explicit
+/// owner decides what the window renders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuickPopupMode {
+    Translate,
+    Lookup,
+}
+
 #[derive(Debug, Clone)]
 pub enum DictDownloadStatus {
     Idle,
@@ -168,6 +180,15 @@ pub struct DictState {
     /// window-closed observer must NOT hide the popup engine for this
     /// programmatic close (the poll loop reopens the window next tick).
     pub qt_replace_pending: bool,
+    /// Which engine owns the shared popup window. `None` while the popup is
+    /// closed. Set by every trigger path, which also hides the other
+    /// engine's state so a stale visible mode can never win the render.
+    pub qt_popup_mode: Option<QuickPopupMode>,
+    /// Bumped on every trigger. Background jobs capture it at spawn time;
+    /// when a result lands after the user switched modes (or triggered
+    /// again), the generation no longer matches and the result is dropped
+    /// instead of resurrecting the old popup state.
+    pub qt_popup_generation: u64,
     /// Last user-chosen Quick Translate popup position (window origin),
     /// recorded by the popup's bounds observer while the user drags it.
     /// The next popup opens here instead of screen-center. X11 only in
@@ -305,6 +326,8 @@ impl DictState {
             qt_inputs_seeded: false,
             qt_popup_window: None,
             qt_replace_pending: false,
+            qt_popup_mode: None,
+            qt_popup_generation: 0,
             qt_popup_pos: None,
             window_calls_missing: if crate::window_move::placement_hint_relevant() {
                 None
@@ -328,6 +351,53 @@ impl DictState {
         // startup — the "auto keyboard shortcut definition" entry point.
         state.sync_os_bindings();
         state
+    }
+
+    /// Make `mode` the owner of the shared popup window.
+    ///
+    /// Only one engine may be visible at a time, so the previous mode's popup
+    /// state is hidden here. The generation bump also invalidates any
+    /// in-flight job from an earlier trigger: its late result must not
+    /// resurrect the mode the user just left.
+    pub fn begin_popup_mode(&mut self, mode: QuickPopupMode) {
+        self.qt_popup_mode = Some(mode);
+        self.qt_popup_generation = self.qt_popup_generation.wrapping_add(1);
+        match mode {
+            QuickPopupMode::Translate => {
+                if let Some(engine) = self.word_lookup_engine.as_mut() {
+                    engine.hide_popup();
+                }
+            }
+            QuickPopupMode::Lookup => {
+                if let Some(engine) = self.quick_translate_engine.as_mut() {
+                    engine.hide_popup();
+                }
+            }
+        }
+    }
+
+    /// Whether an async job started at `generation` for `mode` may still
+    /// write its result into the popup: the popup must still be owned by
+    /// the same mode and no newer trigger may have happened.
+    pub fn popup_job_is_current(&self, generation: u64, mode: QuickPopupMode) -> bool {
+        self.qt_popup_mode == Some(mode) && self.qt_popup_generation == generation
+    }
+
+    /// Whether the active mode's engine currently has popup content to show.
+    /// Only the owning engine counts — a stale `Visible` state left in the
+    /// other engine must not keep the window open.
+    pub fn popup_visible(&self) -> bool {
+        match self.qt_popup_mode {
+            Some(QuickPopupMode::Translate) => self
+                .quick_translate_engine
+                .as_ref()
+                .is_some_and(|e| e.popup_status().is_visible()),
+            Some(QuickPopupMode::Lookup) => self
+                .word_lookup_engine
+                .as_ref()
+                .is_some_and(WordLookupEngine::is_visible),
+            None => false,
+        }
     }
 
     /// Backend of whichever engine currently holds a hotkey manager — the

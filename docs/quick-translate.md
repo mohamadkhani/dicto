@@ -431,6 +431,17 @@ anything else to quick translate — but only when Word Lookup is enabled. The
 lookup hotkey and the tray item are always a plain lookup. Both engines'
 `poll()` only DRAIN events; the poll loop decides what a press means.
 
+### Which mode owns the window
+
+Each trigger calls `DictState::begin_popup_mode`, which records the active
+mode in `qt_popup_mode` and hides the other engine's state. The popup renders
+only the owning engine, so a lookup window left open cannot keep showing its
+definition after Quick Translate is triggered. The same call bumps
+`qt_popup_generation`; background jobs capture it at spawn and discard their
+result when it no longer matches, so a late lookup or translation can never
+bring the previous mode back. `close_popup` and the window-closed observer
+clear `qt_popup_mode`.
+
 ### Flow
 
 ```

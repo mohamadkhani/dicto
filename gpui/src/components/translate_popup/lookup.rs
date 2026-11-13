@@ -135,9 +135,7 @@ fn enable_row(state: Entity<DictState>) -> gpui::AnyElement {
             // block for a few seconds on its first bind.
             crate::components::word_lookup_panel::set_word_lookup_enabled(state.clone(), true, cx);
             state.update(cx, |s, cx| {
-                if let Some(wl) = s.word_lookup_engine.as_mut() {
-                    wl.hide_popup();
-                }
+                s.begin_popup_mode(crate::state::QuickPopupMode::Lookup);
                 cx.notify();
             });
             // Re-run the lookup now that the feature is on. The engine
@@ -159,12 +157,17 @@ fn enable_row(state: Entity<DictState>) -> gpui::AnyElement {
 /// Run a `LookupJob` on the background executor and feed the outcome back
 /// into the engine. Lookup-side twin of `sections::spawn_translation`.
 fn spawn_lookup(job: crate::word_lookup::LookupJob, entity: Entity<DictState>, cx: &mut gpui::App) {
+    let generation = entity.read(cx).qt_popup_generation;
     cx.spawn(async move |cx| {
         let outcome = cx
             .background_executor()
             .spawn(async move { job.run() })
             .await;
         cx.update_entity(&entity, |s, cx| {
+            if !s.popup_job_is_current(generation, crate::state::QuickPopupMode::Lookup) {
+                tracing::debug!(generation, "discarding stale word-lookup result");
+                return;
+            }
             if let Some(engine) = s.word_lookup_engine.as_mut() {
                 engine.apply_result(outcome);
             }
@@ -436,6 +439,9 @@ fn related_words_row(
                 .child(SharedString::from(word.clone()))
                 .on_click(move |_ev, _window, cx| {
                     let job = state.update(cx, |s, _cx| {
+                        // Bump the generation so an older in-flight lookup
+                        // cannot overwrite this newer word's results.
+                        s.begin_popup_mode(crate::state::QuickPopupMode::Lookup);
                         s.word_lookup_engine
                             .as_mut()
                             .map(|wl| wl.lookup_text(word.clone()))
@@ -506,9 +512,7 @@ fn translate_word_from_lookup(state_entity: &Entity<DictState>, cx: &mut gpui::A
         return;
     };
     cx.update_entity(state_entity, |s, cx| {
-        if let Some(wl) = s.word_lookup_engine.as_mut() {
-            wl.hide_popup();
-        }
+        s.begin_popup_mode(crate::state::QuickPopupMode::Translate);
         if let Some(qt) = s.quick_translate_engine.as_mut()
             && let Some(job) = qt.restart_translation(word)
         {

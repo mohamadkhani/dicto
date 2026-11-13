@@ -216,6 +216,9 @@ pub(crate) fn translate_button(
             let original = original.clone();
             let state = state.clone();
             cx.update_entity(&state, |s, cx| {
+                // Bump the generation so an older in-flight translation can
+                // never overwrite this run's result.
+                s.begin_popup_mode(crate::state::QuickPopupMode::Translate);
                 if let Some(engine) = s.quick_translate_engine.as_mut() {
                     if let Some(job) = engine.restart_translation(original) {
                         spawn_translation(job, state.clone(), cx);
@@ -253,12 +256,20 @@ pub(crate) fn spawn_translation(
     entity: Entity<DictState>,
     cx: &mut gpui::App,
 ) {
+    let generation = entity.read(cx).qt_popup_generation;
     cx.spawn(async move |cx| {
         let outcome = cx
             .background_executor()
             .spawn(async move { job.run() })
             .await;
         cx.update_entity(&entity, |s, cx| {
+            // The user may have switched to lookup (or re-triggered) while
+            // the request ran. Writing this stale outcome would resurrect
+            // the translate popup over the new mode.
+            if !s.popup_job_is_current(generation, crate::state::QuickPopupMode::Translate) {
+                tracing::debug!(generation, "discarding stale translation result");
+                return;
+            }
             if let Some(engine) = s.quick_translate_engine.as_mut() {
                 engine.apply_translation_result(outcome);
             }

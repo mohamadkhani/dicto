@@ -26,7 +26,6 @@ pub enum PopupStatus {
 }
 
 impl PopupStatus {
-    #[allow(dead_code)]
     pub fn is_visible(&self) -> bool {
         matches!(self, PopupStatus::Visible(_))
     }
