@@ -1,5 +1,8 @@
 [workspace]
 members = [".", "gpui", "telemetry", "translate"]
+# Vendored third-party crate (see the [patch.crates-io] section at the bottom).
+# Keep it out of the workspace so its own tests and lints never run here.
+exclude = ["vendor/proc-macro-error2"]
 resolver = "2"
 
 # Redirect every crate that asks for GPUI from upstream zed-industries/zed to
@@ -53,3 +56,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "6"
 memmap2 = "0.9.10"
+
+# proc-macro-error2 2.0.1 (pulled in via gpui → stacksafe → stacksafe-macro)
+# re-exports `proc_macro` from a private `extern crate`, which rustc reports as
+# a future incompatibility (E0365, rust-lang/rust#127909). Upstream has no
+# release with the fix, so vendor the crate with `pub extern crate proc_macro;`
+# until a fixed version is published.
+[patch.crates-io]
+proc-macro-error2 = { path = "vendor/proc-macro-error2" }
