@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Dicto — AI Setup (design mockup)</title>
+  <!--
+    Design mockup for the Quick Translate AI onboarding card.
+    No build step: open this file in a browser.
+
+    Four decisions this mockup is testing:
+    1. Card order is network-aware, not country-aware (no "where are you?" question).
+    2. "Base URL" never appears before the user is connected.
+    3. One key covers both translation and the AI voice.
+    4. Free models are the default, and the model list can hide everything paid.
+  -->
+  <script src="vendor/tailwind-browser.js"></script>
+  <style type="text/tailwindcss">
+    @import "tailwindcss";
+    @theme {
+      --color-bg: #0f1117;
+      --color-surface: #1a1d27;
+      --color-elevated: #222634;
+      --color-hover: #2a2f3e;
+      --color-primary: #7aa2f7;
+      --color-ink: #c0caf5;
+      --color-muted: #565f89;
+      --color-line: #292e42;
+      --color-danger: #e05050;
+      --color-warn: #e09050;
+      --color-ok: #50c878;
+    }
+  </style>
+  <style>
+    html { color-scheme: dark; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--color-bg);
+      color: var(--color-ink);
+      font-family: 'Inter', system-ui, sans-serif;
+      padding: 28px 20px 64px;
+    }
+    .frame-label {
+      font-size: 10px; color: var(--color-muted);
+      letter-spacing: .08em; text-transform: uppercase; margin-bottom: 8px;
+    }
+    .card-shadow { box-shadow: 0 18px 50px rgba(0,0,0,.45); }
+    button { font: inherit; }
+    input { font: inherit; }
+    .fade-in { animation: fade .18s ease-out; }
+    @keyframes fade { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+  </style>
+</head>
+<body>
+  <div class="max-w-[1080px] mx-auto">
+    <header class="mb-7">
+      <h1 class="text-[15px] font-semibold m-0">Dicto · Quick Translate setup</h1>
+      <p class="text-[12px] text-muted mt-1 mb-0">
+        Interactive mockup. Pick a network mode, then walk the card. Nothing here is wired to the real app.
+      </p>
+    </header>
+
+    <div class="flex flex-wrap items-start gap-8">
+      <!-- ============ LEFT: the interactive card ============ -->
+      <div class="grow max-w-[600px] min-w-0 basis-[440px]">
+        <div class="flex items-center justify-between mb-3">
+          <span class="frame-label m-0">Settings → Quick Translate · first run</span>
+          <div class="flex items-center gap-1 rounded-lg border border-line bg-surface p-0.5">
+            <button data-net="global"
+              class="px-2.5 py-1 rounded-md text-[11px] text-muted">Global network</button>
+            <button data-net="iran"
+              class="px-2.5 py-1 rounded-md text-[11px] text-muted">Iran network</button>
+          </div>
+        </div>
+        <div id="card" class="card-shadow"></div>
+      </div>
+
+      <!-- ============ RIGHT: notes ============ -->
+      <aside class="w-[300px] shrink-0">
+        <div class="frame-label">Why this shape</div>
+        <ul class="m-0 pl-4 text-[12px] leading-relaxed text-muted space-y-2">
+          <li><span class="text-ink">Order by reachability.</span> No "where are you?" question; two unauthenticated <code class="text-[11px] text-primary">/models</code> probes decide. VPN users get the honest answer too.</li>
+          <li><span class="text-ink">AvalAI is not assumed.</span> It is a normal card with a plain label: Iranian provider, no VPN there, rial payment. Global users skip it.</li>
+          <li><span class="text-ink">No jargon before success.</span> Base URL, model and voice live behind "Advanced". The only field is a key.</li>
+          <li><span class="text-ink">Free first.</span> OpenRouter starts on a free model, and the picker can show free models only. No card is needed for the whole path: free translation, free English voice.</li>
+          <li><span class="text-ink">Voice splits by language.</span> English pronunciation is the common need. The translation side falls back to the system voice when the provider has no voice for that language.</li>
+          <li><span class="text-ink">Errors name the next action.</span> "Key rejected" ≠ "blocked on your network" ≠ "free daily limit reached".</li>
+        </ul>
+
+        <div class="frame-label mt-6">Provider facts</div>
+        <ul class="m-0 pl-4 text-[12px] leading-relaxed text-muted space-y-1.5">
+          <li>OpenRouter: free <code class="text-[11px]">:free</code> models; 20 requests a minute and 50 a day, shared by translation and voice. A one-time $10 top-up raises the day to 1000. The API answers 403 from Iranian IPs.</li>
+          <li>AvalAI: OpenAI-compatible; 200k toman signup credit with phone verification; Gemini 3.8 TTS speaks Persian.</li>
+          <li>GitHub Models: 150 requests/day, text only; the system voice speaks.</li>
+          <li>Ollama + Piper: offline, free, English and Persian voice packs.</li>
+        </ul>
+      </aside>
+    </div>
+
+    <!-- ============ Bottom row: entry points ============ -->
+    <div class="mt-10 flex flex-wrap gap-8 items-start">
+      <div class="w-[560px] max-w-full min-w-0">
+        <div class="frame-label">Entry point · startup banner (not configured)</div>
+        <div id="banner"></div>
+      </div>
+      <div class="w-[420px] max-w-full min-w-0">
+        <div class="frame-label">Entry point · popup after the hotkey</div>
+        <div id="popup"></div>
+      </div>
+    </div>
+
+    <div class="mt-10">
+      <div class="frame-label">Step 3 · error states (same field, four different next actions)</div>
+      <div id="errors" class="w-full max-w-[600px] space-y-1.5"></div>
+    </div>
+  </div>
+
+<script>
+/* ------------------------------------------------------------------ data */
+const PROVIDERS = {
+  openrouter: {
+    id: 'openrouter',
+    name: 'OpenRouter',
+    tagline: 'Many models behind one key, including free ones.',
+    badges: [{ text: 'Free models', tone: 'ok' }],
+    keyed: true,
+    base: 'https://openrouter.ai/api/v1',
+    keyUrl: 'https://openrouter.ai/settings/keys',
+    keyLabel: 'Open OpenRouter keys',
+    steps: [
+      'Sign in with Google, GitHub or email.',
+      'Open <b>Settings → Keys</b> and choose <b>Create key</b>.',
+      'Copy it now — the full key is shown only once.',
+    ],
+    note: 'Blocked in Iran: the API answers 403 even with a valid key.',
+    model: 'google/gemma-4-26b-a4b-it:free',
+    models: [
+      { id: 'google/gemma-4-26b-a4b-it:free', name: 'Gemma 4 26B', free: true },
+      { id: 'google/gemma-4-31b-it:free', name: 'Gemma 4 31B', free: true },
+      { id: 'dots-studio/dots-3-note-preview:free', name: 'Dots 3 Note', free: true },
+      { id: 'baidu/ernie-5.5-flash-preview:free', name: 'ERNIE 5.5 Flash', free: true },
+      { id: 'google/gemini-3.8-flash-lite', name: 'Gemini 3.8 Flash-Lite', free: false },
+    ],
+    voices: {
+      en: { id: 'fish-audio/s2.1-pro-free:free', label: 'Fish Audio S2.1 Pro (free)', free: true },
+      fa: null,
+    },
+    reach: { global: 'ok', iran: 'blocked' },
+    signupNote: 'Free models need no card. The day allows 50 free requests across translation and voice.',
+  },
+  avalai: {
+    id: 'avalai',
+    name: 'AvalAI',
+    tagline: 'Iranian gateway: no VPN, rial payment, Persian voice.',
+    badges: [{ text: 'Works in Iran', tone: 'ok' }, { text: 'One key for both', tone: 'primary' }],
+    keyed: true,
+    base: 'https://api.avalai.ir/v1',
+    keyUrl: 'https://chat.avalai.ir/platform/api-keys',
+    keyLabel: 'Open AvalAI API keys',
+    steps: [
+      'Create an account. Verify your phone number to get 200,000 toman of credit.',
+      'Open <b>API Keys</b> and choose <b>Create key</b>.',
+      'Copy it now — the full key is shown only once.',
+    ],
+    note: 'Email-only signup works too, with 25,000 toman of credit.',
+    model: 'gemini-2.5-flash-lite',
+    voices: {
+      en: { id: 'gemini-3.8-flash-lite-tts', label: 'Gemini 3.8 Flash-Lite TTS', free: false },
+      fa: { id: 'gemini-3.8-flash-lite-tts', label: 'Gemini 3.8 Flash-Lite TTS', free: false },
+    },
+    reach: { global: 'ok', iran: 'ok' },
+    signupNote: 'No credit card. Iranian phone number and rial payment.',
+  },
+  github: {
+    id: 'github',
+    name: 'GitHub Models',
+    tagline: 'Free daily quota with the GitHub account you already have.',
+    badges: [{ text: 'Free daily quota', tone: 'ok' }, { text: 'Text only', tone: 'muted' }],
+    keyed: true,
+    base: 'https://models.github.ai/inference',
+    keyUrl: 'https://github.com/settings/tokens',
+    keyLabel: 'Open GitHub token settings',
+    steps: [
+      'Create a fine-grained token with <b>Models: read</b> permission.',
+      'Copy the token — it starts with <code>github_pat_</code>.',
+      'Paste it below.',
+    ],
+    note: '150 requests per day. Speak falls back to the system voice.',
+    model: 'openai/gpt-4.1-mini',
+    voices: { en: null, fa: null },
+    reach: { global: 'ok', iran: 'ok' },
+    signupNote: 'No payment. Rate-limited per day.',
+  },
+  local: {
+    id: 'local',
+    name: 'On this computer',
+    tagline: 'Ollama or LM Studio. No account, nothing leaves the machine.',
+    badges: [{ text: 'Private', tone: 'primary' }, { text: 'No account', tone: 'muted' }],
+    keyed: false,
+    base: 'http://localhost:11434/v1',
+    keyUrl: null,
+    steps: [
+      'Install <b>Ollama</b> and run <code>ollama pull qwen3:4b</code>.',
+      'Keep Ollama running. No key is needed.',
+      'Optionally install a Piper Persian voice for offline speech.',
+    ],
+    note: 'Quality depends on the model you can run locally.',
+    model: 'qwen3:4b',
+    voices: {
+      en: { id: 'piper-en_US-lessac', label: 'Piper en_US (offline)', free: true },
+      fa: { id: 'piper-fa_IR-amir', label: 'Piper fa_IR (offline)', free: true },
+    },
+    reach: { global: 'ok', iran: 'ok' },
+    signupNote: 'Free. Needs disk space and some RAM.',
+  },
+};
+
+const ORDER = {
+  global: ['openrouter', 'avalai', 'github', 'local'],
+  iran: ['avalai', 'openrouter', 'github', 'local'],
+};
+
+/* ----------------------------------------------------------------- state */
+const state = {
+  net: 'global',
+  reach: {},          // id -> 'checking' | 'ok' | 'blocked'
+  provider: null,
+  model: null,        // selected translation model id
+  freeOnly: true,     // translation model picker filter
+  freeVoice: true,    // voice picker filter
+  step: 1,
+  test: 'idle',       // idle | running | ok | denied | blocked | rate
+  voice: true,
+  key: '',
+  showAdvanced: false,
+  playingSlot: null,  // 'en' | 'fa' | null
+  bannerVisible: true,
+};
+
+/* Deep link for reviewing one state:
+   ?net=iran&provider=avalai&step=3&test=ok&advanced=1 */
+const params = new URLSearchParams(location.search);
+if (params.get('net') === 'global' || params.get('net') === 'iran') state.net = params.get('net');
+if (PROVIDERS[params.get('provider')]) state.provider = params.get('provider');
+if (state.provider) state.model = PROVIDERS[state.provider].model;
+if (params.get('model') && PROVIDERS[state.provider]?.models?.some((m) => m.id === params.get('model'))) {
+  state.model = params.get('model');
+}
+if (params.get('free') === '0') state.freeOnly = false;
+if (params.get('freeVoice') === '0') state.freeVoice = false;
+if (params.has('step')) state.step = Math.min(3, Math.max(1, Number(params.get('step')) || 1));
+if (params.get('test')) state.test = params.get('test');
+state.showAdvanced = params.get('advanced') === '1';
+
+const $ = (sel) => document.querySelector(sel);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/* --------------------------------------------------------------- helpers */
+const toneClass = {
+  ok: 'text-ok border-ok/40 bg-ok/10',
+  primary: 'text-primary border-primary/40 bg-primary/10',
+  muted: 'text-muted border-line bg-elevated',
+  danger: 'text-danger border-danger/40 bg-danger/10',
+};
+
+const badge = (text, tone = 'muted') =>
+  `<span class="text-[10px] px-1.5 py-px rounded border whitespace-nowrap ${toneClass[tone]}">${text}</span>`;
+
+const primaryBtn = (label, action, extra = '') =>
+  `<button data-action="${action}" class="px-3 py-1.5 rounded-md border border-transparent text-[12px] font-medium text-bg bg-primary hover:brightness-110 transition ${extra}">${label}</button>`;
+
+const ghostBtn = (label, action, extra = '') =>
+  `<button data-action="${action}" class="px-3 py-1.5 rounded-md text-[12px] text-ink border border-line hover:bg-hover transition ${extra}">${label}</button>`;
+
+const segment = (label, on, action, value) =>
+  `<button data-action="${action}" data-value="${value}" aria-pressed="${on}" class="px-2 py-0.5 rounded text-[10px] transition ${on ? 'bg-primary/15 text-ink' : 'text-muted hover:text-ink'}">${label}</button>`;
+
+function voiceField(p) {
+  const slots = [
+    ['en', 'English', p.voices.en, 'The quick brown fox jumps over the lazy dog.'],
+    ['fa', 'Persian', p.voices.fa, 'سلام! این یک تست صداست.'],
+  ];
+  const visible = slots.filter(([, , voice]) => voice && (!state.freeVoice || voice.free));
+  return `<div class="mt-2.5 border-t border-line pt-2">
+    <div class="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+      <span class="text-[12px] font-medium text-ink/90">Voices</span>
+      <div class="inline-flex items-center gap-0.5 rounded-md border border-line bg-bg p-0.5">
+        ${segment('Free only', state.freeVoice, 'free-voice', '1')}
+        ${segment('All', !state.freeVoice, 'free-voice', '0')}
+      </div>
+    </div>
+    ${visible.map(([slot, label, voice, sample]) => voiceRow(slot, label, voice, sample)).join('')}
+    ${visible.length === 0 ? '<div class="mt-2 text-[11px] text-muted">No free voice on this provider. The system voice speaks instead.</div>' : ''}
+    ${state.freeVoice && visible.length > 0 ? `<div class="mt-1.5 text-[10px] text-muted">Showing free voices only (${visible.length}).</div>` : ''}
+  </div>`;
+}
+
+function voiceRow(slot, label, voice, sample) {
+  if (!voice) {
+    return `<div class="mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+      ${badge(`${label} → system`, 'muted')}
+      <span class="min-w-0 text-[11px] text-muted">No ${label.toLowerCase()} voice on this provider. Your computer speaks that side.</span>
+    </div>`;
+  }
+  const playing = state.playingSlot === slot;
+  const on = state.voice;
+  return `<div class="mt-2.5">
+    <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+      ${badge(`${label} ${on ? '✓' : '–'}`, on ? 'ok' : 'muted')}
+      <span class="min-w-0 text-[11px] text-muted">${esc(voice.label)}</span>
+      <button data-action="play" data-slot="${slot}" class="size-6 shrink-0 rounded-full border border-line grid place-items-center text-[10px] text-primary hover:bg-hover ${playing ? 'bg-primary/15' : ''}">${playing ? '■' : '▶'}</button>
+    </div>
+    <div class="mt-1 text-[11px] ${playing ? 'text-primary' : 'text-muted'}" dir="${slot === 'fa' ? 'rtl' : 'ltr'}">${playing ? 'Playing…' : sample}</div>
+  </div>`;
+}
+
+function modelField(p) {
+  if (!p.models) {
+    return `<label class="block text-[12px]">Translation model
+      <input value="${esc(state.model || p.model)}" class="mt-1 w-full px-2 py-1.5 rounded-md bg-surface border border-line text-[11px] text-ink outline-none focus:border-primary" />
+    </label>`;
+  }
+  const visible = p.models.filter((m) => !state.freeOnly || m.free);
+  const freeCount = p.models.filter((m) => m.free).length;
+  return `<div>
+    <div class="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+      <span class="text-[12px] font-semibold">Translation model</span>
+      <div class="inline-flex items-center gap-0.5 rounded-md border border-line bg-bg p-0.5">
+        ${segment('Free only', state.freeOnly, 'free-text', '1')}
+        ${segment('All', !state.freeOnly, 'free-text', '0')}
+      </div>
+    </div>
+    <div class="mt-1.5 flex flex-col gap-1">
+      ${visible.map((m) => {
+        const sel = m.id === state.model;
+        return `<button data-model="${esc(m.id)}" class="w-full text-left rounded-md border px-2 py-1.5 transition ${sel ? 'border-primary bg-primary/20' : 'border-line bg-surface/40 hover:bg-hover'}">
+          <span class="flex items-start gap-2">
+            <span class="mt-0.5 grid size-3 shrink-0 place-items-center rounded-full border ${sel ? 'border-primary' : 'border-muted/70'}">
+              ${sel ? '<span class="size-1.5 rounded-full bg-primary"></span>' : ''}
+            </span>
+            <span class="min-w-0 flex-1">
+              <span class="flex items-center justify-between gap-2">
+                <span class="min-w-0 text-[11px] text-ink">${esc(m.name)}</span>
+                <span class="shrink-0">${state.freeOnly ? '' : (m.free ? badge('Free', 'ok') : badge('Needs credit', 'muted'))}</span>
+              </span>
+              <span class="mt-0.5 block min-w-0 text-[10px] leading-4 text-ink/75 font-mono break-all" title="${esc(m.id)}">${esc(m.id)}</span>
+            </span>
+          </span>
+        </button>`;
+      }).join('')}
+    </div>
+    <div class="mt-1.5 text-[10px] text-muted">${state.freeOnly ? `Showing free models only (${freeCount}). ` : ''}The list is refreshed from the provider when you test.</div>
+  </div>`;
+}
+
+function stepper() {
+  const items = ['Choose a service', 'Get a key', 'Connect'];
+  return `<div class="flex flex-wrap items-center gap-x-2 gap-y-2 mb-4 max-[420px]:gap-x-1">
+    ${items.map((label, i) => {
+      const n = i + 1;
+      const active = state.step === n;
+      const done = state.step > n || (n === 3 && state.test === 'ok');
+      const cls = active ? 'text-ink border-primary' : done ? 'text-ok border-ok/50' : 'text-muted border-line';
+      return `<div class="flex items-center gap-1.5">
+        <span class="size-5 rounded-full border text-[10px] grid place-items-center max-[420px]:size-4 max-[420px]:text-[9px] ${cls}">${done ? '✓' : n}</span>
+        <span class="text-[11px] max-[420px]:text-[10px] ${active ? 'text-ink' : 'text-muted'}">${label}</span>
+        ${n < 3 ? '<span class="w-5 h-px bg-line mx-1 max-[420px]:w-2 max-[420px]:mx-0.5"></span>' : ''}
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+/* ------------------------------------------------------------- renders */
+function renderCard() {
+  const provider = state.provider ? PROVIDERS[state.provider] : null;
+  const body =
+    state.step === 1 ? renderChoose() :
+    state.step === 2 ? renderGetKey(provider) :
+    renderConnect(provider);
+
+  return `<div class="rounded-xl border border-line bg-surface overflow-hidden fade-in">
+    <div class="px-5 pt-5 pb-4">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <h2 class="m-0 text-[16px] font-semibold">${provider ? `Set up ${provider.name}` : 'Turn on Quick Translate'}</h2>
+          <p class="m-0 mt-1 text-[12px] text-muted">
+            ${provider ? provider.tagline : 'Translate anything you select and hear it read aloud. Two minutes, one key.'}
+          </p>
+        </div>
+        ${provider ? ghostBtn('Change', 'back') : ''}
+      </div>
+      <div class="mt-4">${stepper()}</div>
+      ${body}
+    </div>
+    ${state.step === 1 ? `
+    <div class="px-5 py-3 border-t border-line bg-bg/40 flex items-center justify-between gap-3">
+      <span class="min-w-0 text-[11px] text-muted">The offline dictionary keeps working without any of this.</span>
+      ${ghostBtn('Later', 'later')}
+    </div>` : ''}
+  </div>`;
+}
+
+function renderChoose() {
+  return `<div class="space-y-2">
+    ${ORDER[state.net].map((id) => {
+      const p = PROVIDERS[id];
+      const r = state.reach[id];
+      const status =
+        r === 'checking' ? badge('checking your network…', 'muted') :
+        r === 'blocked' ? badge('✕ blocked on your network', 'danger') :
+        r === 'ok' ? badge('✓ reachable', 'ok') : '';
+      return `<button data-action="pick" data-id="${id}" class="w-full text-left rounded-lg border border-line hover:border-primary/50 hover:bg-hover/40 transition px-3.5 py-3 group">
+        <div class="flex items-center justify-between gap-3">
+          <div class="min-w-0">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="text-[13px] font-medium">${p.name}</span>
+              ${p.badges.map((b) => badge(b.text, b.tone)).join('')}
+              ${status}
+            </div>
+            <div class="text-[11px] text-muted mt-1">${p.tagline}</div>
+          </div>
+          <span class="text-muted group-hover:text-primary text-[14px] shrink-0">›</span>
+        </div>
+      </button>`;
+    }).join('')}
+    <button data-action="advanced" class="w-full text-left text-[11px] text-muted px-1 pt-1 hover:text-ink">
+      Another OpenAI-compatible service… <span class="text-primary">set it up by hand</span>
+    </button>
+  </div>`;
+}
+
+function stepsList(steps) {
+  return `<ol class="m-0 p-0 space-y-2.5">
+    ${steps.map((s, i) => `<li class="flex gap-2.5 text-[12px] leading-relaxed">
+      <span class="mt-0.5 size-4 shrink-0 rounded-full border border-line text-[10px] text-muted grid place-items-center">${i + 1}</span>
+      <span class="min-w-0">${s}</span>
+    </li>`).join('')}
+  </ol>`;
+}
+
+function renderGetKey(p) {
+  if (!p.keyed) {
+    return `<div class="flex flex-col gap-3.5">
+      ${stepsList(p.steps)}
+      <div class="text-[11px] text-muted">${p.note}</div>
+      <div>${primaryBtn('It’s running — test it', 'next')}</div>
+    </div>`;
+  }
+  return `<div class="flex flex-col gap-3.5">
+    ${stepsList(p.steps)}
+    <a href="${p.keyUrl}" target="_blank" rel="noreferrer"
+      class="group my-0.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-md border border-line bg-bg px-3 py-2 text-[12px] text-primary hover:border-primary/50 hover:bg-hover/40 transition">
+      <span class="inline-flex min-w-0 items-center gap-1 group-hover:underline">${p.keyLabel} <span aria-hidden="true">↗</span></span>
+      <span class="text-[11px] text-muted">opens in your browser</span>
+    </a>
+    <div class="text-[11px] text-muted">${p.signupNote}</div>
+    ${p.reach[state.net] === 'blocked' ? `
+      <div class="rounded-md border border-warn/40 bg-warn/5 px-3 py-2 text-[11px] text-warn leading-relaxed">
+        This service does not answer from your network. A VPN is required. If you do not have one,
+        go back and pick a provider marked <span class="text-ink">reachable</span>.
+      </div>` : ''}
+    <div class="flex items-center justify-between">
+      ${ghostBtn('Back', 'back')}
+      ${primaryBtn('I have a key', 'next')}
+    </div>
+  </div>`;
+}
+
+function testMessage() {
+  switch (state.test) {
+    case 'running': return `<div class="flex items-center gap-2 text-[11px] text-muted"><span class="animate-spin inline-block size-3 rounded-full border border-muted border-t-transparent"></span> Testing…</div>`;
+    case 'ok':      return `<div class="text-[11px] text-ok">✓ Connected. The key works.</div>`;
+    case 'denied':  return `<div class="text-[11px] text-danger">✗ The key was rejected. Copy it again from the provider page — extra spaces count.</div>`;
+    case 'blocked': return `<div class="text-[11px] text-danger">✗ This service is blocked on your network. Pick AvalAI instead, or turn on your VPN.</div>`;
+    case 'rate':    return `<div class="text-[11px] text-warn">⚠ Too many requests right now. Wait ten seconds and test again.</div>`;
+    default:        return `<div class="text-[11px] text-muted">Nothing is sent until you press Test.</div>`;
+  }
+}
+
+function renderConnect(p) {
+  const ok = state.test === 'ok';
+  if (ok) {
+    const vEn = p.voices.en;
+    const vFa = p.voices.fa;
+    const hasVoice = Boolean(vEn || vFa);
+    const selected = p.models?.find((m) => m.id === state.model);
+    const isFree = Boolean(selected?.free);
+    return `<div class="space-y-4">
+      <div class="rounded-lg border border-ok/40 bg-ok/5 px-3.5 py-3">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="flex items-center gap-2 text-[12px] font-medium text-ok">✓ ${p.name} connected</div>
+          <div class="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
+            ${isFree ? badge('Free model', 'ok') : ''}
+            <span class="min-w-0 text-[11px] text-ink/70 font-mono break-all">${esc(state.model)}</span>
+          </div>
+        </div>
+        <div class="mt-2.5 text-[12px] leading-relaxed" dir="auto">
+          <div class="text-muted">The quick brown fox jumps over the lazy dog.</div>
+          <div class="text-ink mt-1">روباه سریع قهوه‌ای از روی سگ تنبل می‌پرد.</div>
+        </div>
+        <div class="mt-2.5 border-t border-ok/25 pt-2 text-[10px] leading-relaxed text-muted">
+          Free tier: 20 a minute, 50 a day, shared by translation and voice. $10 once raises it to 1000 a day.
+        </div>
+      </div>
+
+      <div class="rounded-lg border border-line px-3.5 py-3">
+        ${modelField(p)}
+      </div>
+
+      <div class="rounded-lg border border-line px-3.5 py-3">
+        <div class="flex items-center justify-between gap-3">
+          <div class="min-w-0">
+            <div class="text-[12px] font-semibold">AI voice</div>
+            <div class="text-[11px] text-muted mt-0.5">${hasVoice ? 'Uses the same key. English first, then the translation.' : 'None on this provider. Your computer speaks instead.'}</div>
+          </div>
+          ${hasVoice ? `<button data-action="voice" aria-pressed="${state.voice}"
+            class="shrink-0 w-9 h-5 rounded-full relative transition ${state.voice ? 'bg-primary' : 'bg-elevated'}">
+            <span class="absolute top-0.5 size-4 rounded-full bg-bg transition-all ${state.voice ? 'left-4.5' : 'left-0.5'}"></span>
+          </button>` : ''}
+        </div>
+        ${hasVoice ? voiceField(p) : ''}
+      </div>
+
+      ${state.showAdvanced ? `
+      <div class="rounded-lg border border-line bg-bg px-3.5 py-3 space-y-2.5">
+        <div class="text-[11px] text-muted">These already work. Change them only if you have a reason.</div>
+        <label class="block text-[11px] text-muted">Base URL
+          <input value="${esc(p.base)}" class="mt-1 w-full px-2 py-1.5 rounded-md bg-surface border border-line text-[11px] text-ink outline-none focus:border-primary" />
+        </label>
+        <div class="grid gap-2 sm:grid-cols-2">
+          <label class="block text-[11px] text-muted">English voice
+            <input value="${esc(vEn ? vEn.id : '—')}" class="mt-1 w-full px-2 py-1.5 rounded-md bg-surface border border-line text-[11px] text-ink outline-none focus:border-primary" />
+          </label>
+          <label class="block text-[11px] text-muted">Persian voice
+            <input value="${esc(vFa ? vFa.id : '—')}" class="mt-1 w-full px-2 py-1.5 rounded-md bg-surface border border-line text-[11px] text-ink outline-none focus:border-primary" />
+          </label>
+        </div>
+      </div>` : ''}
+
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        ${ghostBtn(state.showAdvanced ? 'Hide advanced' : 'Advanced', 'advanced')}
+        <div class="flex items-center gap-2">
+          ${ghostBtn('Done', 'done')}
+          ${primaryBtn('Try it now', 'try')}
+        </div>
+      </div>
+      <div class="text-[11px] text-muted text-center -mt-1">Select text anywhere, then press <kbd class="px-1 py-0.5 rounded bg-elevated border border-line text-[10px]">Ctrl</kbd>+<kbd class="px-1 py-0.5 rounded bg-elevated border border-line text-[10px]">Alt</kbd>+<kbd class="px-1 py-0.5 rounded bg-elevated border border-line text-[10px]">D</kbd></div>
+    </div>`;
+  }
+
+  return `<div class="space-y-3">
+    ${p.keyed ? `
+      <label class="block text-[11px] text-muted">API key</label>
+      <div class="flex items-center gap-2">
+        <input id="key" type="password" value="${esc(state.key)}" placeholder="Paste your key"
+          class="flex-1 min-w-0 px-2.5 py-1.5 rounded-md bg-bg border border-line text-[12px] outline-none focus:border-primary" />
+        <button data-action="reveal" class="px-2 py-1.5 rounded-md border border-line text-[11px] text-muted hover:bg-hover">show</button>
+      </div>
+      <div class="text-[11px] text-muted">Stored only on this computer. It is never sent anywhere except ${p.name}.</div>
+    ` : `
+      <div class="rounded-md border border-line bg-bg px-3 py-2 text-[12px]">No key needed for ${p.name}.</div>
+    `}
+    <div class="flex items-center gap-2 pt-1">
+      ${primaryBtn(state.test === 'running' ? 'Testing…' : 'Test & save', 'test')}
+      ${ghostBtn('Back', 'back')}
+    </div>
+    ${testMessage()}
+    <details class="text-[11px] text-muted pt-1">
+      <summary class="cursor-pointer hover:text-ink">What did Test just check?</summary>
+      <div class="mt-1.5 leading-relaxed">Reachability of <code class="text-[10px]">${esc(p.base)}</code>, key acceptance, one real
+      translation of “The quick brown fox…”, and the free requests left on the key today. It saves the settings only when all of them pass.</div>
+    </details>
+  </div>`;
+}
+
+/* ------------------------------------------------------- entry points */
+function renderBanner() {
+  if (!state.bannerVisible) return '<div class="text-[11px] text-muted italic">Banner dismissed. In the app it returns if setup is still missing after a restart.</div>';
+  return `<div class="rounded-lg border border-line bg-surface px-3 py-2 flex items-center justify-between gap-3">
+    <div class="flex items-center gap-2 min-w-0">
+      <span class="text-[12px]">✨</span>
+      <span class="min-w-0 text-[12px] text-muted">Quick Translate is one key away — translate selected text anywhere.</span>
+    </div>
+    <div class="flex items-center gap-1.5 shrink-0">
+      ${primaryBtn('Set up', 'banner-setup', 'px-2.5 py-1 text-[11px]')}
+      <button data-action="banner-later" class="px-2 py-1 text-[11px] text-muted hover:text-ink">Later</button>
+      <button data-action="banner-later" class="size-6 grid place-items-center text-muted hover:text-ink" aria-label="Dismiss">✕</button>
+    </div>
+  </div>`;
+}
+
+function renderPopup() {
+  return `<div class="w-full max-w-[420px] card-shadow rounded-xl border border-line bg-surface overflow-hidden">
+    <div class="px-4 py-3 flex items-center justify-between border-b border-line">
+      <span class="text-[11px] tracking-wide uppercase text-muted">Translate</span>
+      <span class="text-[11px] text-muted">Esc</span>
+    </div>
+    <div class="px-4 py-4 space-y-2">
+      <div class="text-[12px] text-muted">Translation is not set up yet.</div>
+      <div class="text-[12px] leading-relaxed text-ink">Add one AI key and this popup will translate and speak whatever you select.</div>
+    </div>
+    <div class="px-4 py-3 border-t border-line flex items-center justify-between">
+      <span class="text-[11px] text-muted">Dictionary lookup already works offline.</span>
+      ${primaryBtn('Set up', 'popup-setup', 'px-2.5 py-1 text-[11px]')}
+    </div>
+  </div>`;
+}
+
+function renderErrors() {
+  const rows = [
+    { icon: '✗', tone: 'danger', title: 'Key rejected', detail: 'Copy the key again from the provider page. Extra spaces count.' },
+    { icon: '✗', tone: 'danger', title: 'Service blocked on your network', detail: 'Pick a provider marked reachable, or turn on your VPN.' },
+    { icon: '⚠', tone: 'warn', title: 'Too many requests', detail: 'Free tier: 20 a minute and 50 a day, shared by translation and voice. Wait, or turn the voice off.' },
+    { icon: '⚠', tone: 'warn', title: 'No credit left', detail: 'Top up at the provider. Your settings and key stay as they are.' },
+  ];
+  return rows.map((r) => `<div class="rounded-md border border-line bg-surface px-3 py-2 flex items-start gap-2.5">
+    <span class="text-[12px] text-${r.tone} mt-px">${r.icon}</span>
+    <div class="min-w-0">
+      <div class="text-[12px] text-ink">${r.title}</div>
+      <div class="text-[11px] text-muted">${r.detail}</div>
+    </div>
+  </div>`).join('');
+}
+
+/* ----------------------------------------------------------- behaviour */
+function renderAll() {
+  $('#card').innerHTML = renderCard();
+  $('#banner').innerHTML = renderBanner();
+  $('#popup').innerHTML = renderPopup();
+  $('#errors').innerHTML = renderErrors();
+  // keep the caret in the key field while typing
+  const key = document.getElementById('key');
+  if (key && document.activeElement !== key && state.key) key.value = state.key;
+  document.querySelectorAll('[data-net]').forEach((b) => {
+    const on = b.dataset.net === state.net;
+    b.className = `px-2.5 py-1 rounded-md text-[11px] transition ${on ? 'bg-elevated text-ink' : 'text-muted hover:text-ink'}`;
+  });
+}
+
+function probe() {
+  const ids = ORDER[state.net];
+  ids.forEach((id) => { state.reach[id] = 'checking'; });
+  renderAll();
+  setTimeout(() => {
+    ids.forEach((id) => { state.reach[id] = PROVIDERS[id].reach[state.net]; });
+    renderAll();
+  }, 700);
+}
+
+document.addEventListener('click', (e) => {
+  const net = e.target.closest('[data-net]');
+  if (net) { state.net = net.dataset.net; state.provider = null; state.step = 1; state.test = 'idle'; probe(); return; }
+
+  const model = e.target.closest('[data-model]');
+  if (model) { state.model = model.dataset.model; renderAll(); return; }
+
+  const el = e.target.closest('[data-action]');
+  if (!el) return;
+  const action = el.dataset.action;
+
+  if (action === 'pick') {
+    state.provider = el.dataset.id;
+    state.model = PROVIDERS[el.dataset.id].model;
+    state.step = 2;
+    state.test = 'idle';
+    state.key = '';
+    renderAll();
+  } else if (action === 'next') {
+    state.step = 3; renderAll();
+  } else if (action === 'back') {
+    if (state.step === 3) {
+      state.step = 2; state.test = 'idle'; state.showAdvanced = false;
+    } else {
+      state.provider = null; state.step = 1; state.test = 'idle';
+    }
+    renderAll();
+  } else if (action === 'test') {
+    const p = PROVIDERS[state.provider];
+    state.test = 'running'; renderAll();
+    setTimeout(() => {
+      if (state.net === 'iran' && p.reach.iran === 'blocked') state.test = 'blocked';
+      else state.test = 'ok';
+      renderAll();
+    }, 850);
+  } else if (action === 'advanced') {
+    state.showAdvanced = !state.showAdvanced; renderAll();
+  } else if (action === 'play') {
+    state.playingSlot = el.dataset.slot || 'en'; renderAll();
+    clearTimeout(state.playTimer);
+    state.playTimer = setTimeout(() => { state.playingSlot = null; renderAll(); }, 1400);
+  } else if (action === 'banner-setup' || action === 'popup-setup') {
+    const card = $('#card');
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    card.classList.add('ring-2', 'ring-primary/60', 'rounded-xl');
+    setTimeout(() => card.classList.remove('ring-2', 'ring-primary/60', 'rounded-xl'), 900);
+  } else if (action === 'banner-later') {
+    state.bannerVisible = false; renderAll();
+  } else if (action === 'free-text' || action === 'free-voice') {
+    const on = el.dataset.value === '1';
+    if (action === 'free-text') {
+      state.freeOnly = on;
+      // Leaving a paid model selected while the filter says "free only"
+      // would be a lie: move to the first free model when one exists.
+      if (on) {
+        const p = PROVIDERS[state.provider];
+        const current = p?.models?.find((m) => m.id === state.model);
+        if (current && !current.free) {
+          const free = p.models.find((m) => m.free);
+          if (free) state.model = free.id;
+        }
+      }
+    } else {
+      state.freeVoice = on;
+    }
+    renderAll();
+  } else if (action === 'voice') {
+    state.voice = !state.voice; renderAll();
+  } else if (action === 'reveal') {
+    const input = document.getElementById('key');
+    if (input) input.type = input.type === 'password' ? 'text' : 'password';
+  } else if (action === 'try') {
+    const popup = $('#popup');
+    popup.classList.add('ring-2', 'ring-primary/60', 'rounded-xl');
+    setTimeout(() => popup.classList.remove('ring-2', 'ring-primary/60', 'rounded-xl'), 900);
+  } else if (action === 'done' || action === 'later') {
+    state.provider = null; state.step = 1; state.test = 'idle'; state.showAdvanced = false; renderAll();
+  }
+});
+
+document.addEventListener('input', (e) => {
+  if (e.target.id === 'key') state.key = e.target.value;
+});
+
+probe();
+</script>
+</body>
+</html>

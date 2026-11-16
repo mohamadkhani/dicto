@@ -56,7 +56,7 @@ pub fn import_panel_content(
                             .justify_between()
                             .child(
                                 div()
-                                    .text_size(px(11.))
+                                    .text_size(px(12.))
                                     .text_color(colors::text_secondary())
                                     .child(SharedString::from(format!(
                                         "{} / {} files",
@@ -72,7 +72,7 @@ pub fn import_panel_content(
                             )
                             .child(
                                 div()
-                                    .text_size(px(11.))
+                                    .text_size(px(12.))
                                     .text_color(colors::text_secondary())
                                     .child(SharedString::from(format!("{:.0}%", progress_pct))),
                             ),
@@ -96,13 +96,13 @@ fn instructions() -> gpui::AnyElement {
         .gap(px(4.))
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(px(14.))
                 .text_color(colors::text())
                 .child("To get started, add your MDict dictionary files."),
         )
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(px(13.))
                 .text_color(colors::text_secondary())
                 .child(
                     "Supported: .mdx, .mdd, .css, .js, .png  ·  All must share the same name as a dictionary. Files are copied to ~/.config/dicto/dicts/",
@@ -158,20 +158,20 @@ fn drop_zone(state: Entity<DictState>, is_importing: bool) -> gpui::AnyElement {
 
     zone.child(
         div()
-            .text_size(px(24.))
+            .text_size(px(26.))
             .text_color(colors::text_secondary())
             .child("⊕"),
     )
     .child(
         div()
-            .text_size(px(13.))
+            .text_size(px(14.))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(colors::text())
             .child("Drop files or click to browse"),
     )
     .child(
         div()
-            .text_size(px(11.))
+            .text_size(px(12.))
             .text_color(colors::text_secondary())
             .child("MDX · MDD · CSS · JS · PNG  (all need a matching dictionary)"),
     )
@@ -242,7 +242,7 @@ fn file_row(idx: usize, file: &ImportFile) -> gpui::AnyElement {
                 .gap(px(2.))
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(px(13.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(colors::text())
                         .overflow_hidden()
@@ -251,7 +251,7 @@ fn file_row(idx: usize, file: &ImportFile) -> gpui::AnyElement {
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(px(12.))
                         .text_color(color)
                         .child(SharedString::from(status_text)),
                 ),

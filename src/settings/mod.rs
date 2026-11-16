@@ -15,6 +15,8 @@ use tracing::{info, warn};
 
 use crate::config::{APP_NAME, discover_mdx_files};
 
+pub mod free;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
@@ -126,6 +128,14 @@ pub struct QuickTranslateSettings {
     /// Model name, e.g. "claude-sonnet-4-6" or "gpt-4o-mini".
     #[serde(default = "default_model")]
     pub model: String,
+    /// Offer only free models in the translation picker.
+    ///
+    /// The setting starts on, so a key with no credit works out of the box.
+    /// A key that has credit can turn it off, but a key without credit stays
+    /// on free models regardless — a paid model would answer 402. The voice
+    /// picker has its own switch in [`TtsSettings::free_only`].
+    #[serde(default = "default_true")]
+    pub free_only: bool,
     /// Target language for translation, e.g. "English", "Persian".
     #[serde(default = "default_target_lang")]
     pub target_lang: String,
@@ -143,6 +153,7 @@ impl Default for QuickTranslateSettings {
             api_key: String::new(),
             api_base_url: String::new(),
             model: default_model(),
+            free_only: true,
             target_lang: default_target_lang(),
             tts: TtsSettings::default(),
         }
@@ -198,6 +209,10 @@ pub struct TtsSettings {
     /// TTS model, e.g. "gpt-4o-mini-tts" or "tts-1".
     #[serde(default = "default_tts_model")]
     pub model: String,
+    /// Offer only free models in the voice picker. Same rule as the
+    /// translation switch: separate, because the two pickers are separate.
+    #[serde(default = "default_true")]
+    pub free_only: bool,
     /// Voice name, e.g. "alloy", "nova", "shimmer".
     #[serde(default = "default_tts_voice")]
     pub voice: String,
@@ -210,6 +225,7 @@ impl Default for TtsSettings {
             api_key: String::new(),
             api_base_url: default_tts_base_url(),
             model: default_tts_model(),
+            free_only: true,
             voice: default_tts_voice(),
         }
     }
@@ -270,6 +286,12 @@ fn default_enabled() -> bool {
     true
 }
 
+/// Serde default for switches that start on, such as the free-model
+/// filters.
+fn default_true() -> bool {
+    true
+}
+
 pub fn settings_path() -> PathBuf {
     let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from(".config"));
     base.join(APP_NAME).join("settings.toml")
@@ -299,9 +321,11 @@ fn load_from_disk() -> Settings {
 }
 
 /// One-time migrations for settings written by older versions. Currently:
-/// coerce the removed Anthropic provider to OpenAI-compatible, and give it
-/// the OpenAI base URL when the file has none (Anthropic used a different
-/// endpoint, so the old base URL — if any — would be wrong anyway).
+/// coerce the removed Anthropic provider to OpenAI-compatible, give it the
+/// OpenAI base URL when the file has none (Anthropic used a different
+/// endpoint, so the old base URL — if any — would be wrong anyway), and move
+/// an OpenRouter base URL off the OpenAI placeholder model, which OpenRouter
+/// does not serve.
 fn migrate(s: &mut Settings) {
     let qt = &mut s.quick_translate;
     if qt.llm_provider == LlmProvider::Anthropic {
@@ -309,6 +333,10 @@ fn migrate(s: &mut Settings) {
         if qt.api_base_url.is_empty() {
             qt.api_base_url = "https://api.openai.com/v1".to_string();
         }
+    }
+    let placeholder = qt.model.is_empty() || qt.model == "gpt-4o-mini";
+    if placeholder && free::is_openrouter(&qt.api_base_url) {
+        qt.model = free::default_text_model_for(&qt.api_base_url).to_string();
     }
 }
 

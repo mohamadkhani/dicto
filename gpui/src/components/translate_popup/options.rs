@@ -37,7 +37,7 @@ const CHIPS_UP_TO: usize = 4;
 /// The settings fields the pickers are built from. `sync` compares this key
 /// to decide whether the catalogs need rebuilding (`QuickTranslateSettings`
 /// has no `PartialEq`).
-type SettingsKey = (String, String, String, String, String);
+type SettingsKey = (String, String, String, String, String, bool, bool);
 
 fn settings_key(s: &QuickTranslateSettings) -> SettingsKey {
     (
@@ -46,6 +46,10 @@ fn settings_key(s: &QuickTranslateSettings) -> SettingsKey {
         s.tts.model.clone(),
         s.tts.api_base_url.clone(),
         s.tts.voice.clone(),
+        // Each picker has its own free-only switch, so both are part of
+        // the key.
+        s.free_only,
+        s.tts.free_only,
     )
 }
 
@@ -58,12 +62,12 @@ fn model_items(
     settings: &QuickTranslateSettings,
     cx: &App,
 ) -> Vec<PickerItem> {
-    // Catalog comes from the /models load only — no hardcoded list.
-    let mut items: Vec<PickerItem> = state
-        .read(cx)
-        .qt_openai_models
-        .iter()
-        .map(|m| PickerItem::new(m.clone(), m.clone()))
+    // Catalog comes from the /models load only — no hardcoded list. The
+    // free-only switch trims it to `:free` variants when any exist.
+    let loaded = state.read(cx).qt_openai_models.clone();
+    let mut items: Vec<PickerItem> = qt_catalog::filter_free(&loaded, settings.free_only)
+        .into_iter()
+        .map(|m| PickerItem::new(m.clone(), m))
         .collect();
     push_custom(&mut items, &settings.model);
     items
@@ -114,18 +118,19 @@ fn tts_model_items(
     loaded: Vec<dicto_translate::openai::TtsModel>,
 ) -> Vec<PickerItem> {
     // Catalog: the TTS-filtered /models load when it found models, else
-    // the curated fallback.
-    let mut items: Vec<PickerItem> = if !loaded.is_empty() {
-        loaded
-            .iter()
-            .map(|m| PickerItem::new(m.id.clone(), m.id.clone()))
-            .collect()
+    // the curated fallback. Both pass through the free-only switch.
+    let catalog: Vec<String> = if !loaded.is_empty() {
+        loaded.iter().map(|m| m.id.clone()).collect()
     } else {
         qt_catalog::OPENAI_TTS_MODELS
             .iter()
-            .map(|&id| PickerItem::new(id, id))
+            .map(|&id| id.to_string())
             .collect()
     };
+    let mut items: Vec<PickerItem> = qt_catalog::filter_free(&catalog, settings.tts.free_only)
+        .into_iter()
+        .map(|id| PickerItem::new(id.clone(), id))
+        .collect();
     let current = settings.tts.model.as_str();
     if !current.is_empty() && !items.iter().any(|i| i.id.as_ref() == current) {
         items.push(PickerItem::new(
@@ -172,20 +177,61 @@ fn voice_items(
 /// from the configured endpoints, in the background. Silent on failure —
 /// the pickers keep their fallback lists / current values.
 fn autoload_models(state: &Entity<DictState>, cx: &mut Context<OptionsPanel>) {
-    // Mark immediately so concurrent sync ticks don't double-spawn.
-    state.update(cx, |st, _| st.qt_models_autoloaded = true);
-
     let quick = state.read(cx).quick_translate.clone();
     let (t_key, t_base) = (quick.api_key.clone(), quick.api_base_url.clone());
     let (v_key, v_base) = (quick.tts.api_key.clone(), quick.tts.api_base_url.clone());
+    let text_key = qt_catalog::load_key(&t_base, &t_key);
+    let voice_key = qt_catalog::load_key(&v_base, &v_key);
+
+    // No base URL yet (fresh install): nothing to ask.
+    let chat_req = (!t_base.trim().is_empty()).then_some((t_key, t_base));
+    let tts_req = (!v_base.trim().is_empty()).then_some((v_key, v_base));
+
+    // The settings tab loads the same lists as soon as it renders, so a
+    // list whose endpoint + key already match does not need fetching
+    // again. Tracking the two lists separately keeps a keyless endpoint
+    // from marking the other one as loaded.
+    let (chat_pending, tts_pending) = {
+        let st = state.read(cx);
+        (
+            chat_req.is_some() && st.qt_models_loaded_for.as_ref() != Some(&text_key),
+            tts_req.is_some() && st.qt_tts_models_loaded_for.as_ref() != Some(&voice_key),
+        )
+    };
+    // Mark immediately so concurrent sync ticks don't double-spawn, and
+    // record the endpoint + key now so the settings tab does not repeat a
+    // request this one is already making.
+    state.update(cx, |st, _| {
+        st.qt_models_autoloaded = true;
+        if chat_pending {
+            st.qt_models_loaded_for = Some(text_key.clone());
+        }
+        if tts_pending {
+            st.qt_tts_models_loaded_for = Some(voice_key.clone());
+        }
+    });
+    if !chat_pending && !tts_pending {
+        return;
+    }
+
     let state = state.clone();
 
     cx.spawn(async move |this, cx: &mut AsyncApp| {
         let bg = cx.background_executor();
-        let chat =
-            bg.spawn(async move { dicto_translate::openai::list_models(&t_key, &t_base).ok() });
-        let tts =
-            bg.spawn(async move { dicto_translate::openai::list_tts_models(&v_key, &v_base).ok() });
+        let chat = bg.spawn(async move {
+            if !chat_pending {
+                return None;
+            }
+            let (key, base) = chat_req?;
+            dicto_translate::openai::list_models(&key, &base).ok()
+        });
+        let tts = bg.spawn(async move {
+            if !tts_pending {
+                return None;
+            }
+            let (key, base) = tts_req?;
+            dicto_translate::openai::list_tts_models(&key, &base).ok()
+        });
         let (chat, tts) = (chat.await, tts.await);
 
         cx.update_entity(&state, |st, cx| {
@@ -221,9 +267,10 @@ pub(crate) struct OptionsPanel {
     /// Settings snapshot the pickers were last built from; [`Self::sync`]
     /// rebuilds when the live settings diverge.
     synced: SettingsKey,
-    /// Length of the shared TTS /models load at last sync — its change
-    /// alone must also trigger a picker rebuild.
-    synced_loaded: usize,
+    /// Lengths of the shared /models loads (translation, TTS) at last
+    /// sync — a change alone must also trigger a picker rebuild, because
+    /// both pickers are built from those caches.
+    synced_loaded: (usize, usize),
 }
 
 impl OptionsPanel {
@@ -317,7 +364,10 @@ impl OptionsPanel {
             cx,
         );
 
-        let synced_loaded = state.read(cx).qt_tts_models.len();
+        let synced_loaded = (
+            state.read(cx).qt_openai_models.len(),
+            state.read(cx).qt_tts_models.len(),
+        );
         Self {
             state,
             model,
@@ -367,7 +417,10 @@ impl OptionsPanel {
 
         let settings = self.state.read(cx).quick_translate.clone();
         let key = settings_key(&settings);
-        let loaded_key = self.state.read(cx).qt_tts_models.len();
+        let loaded_key = (
+            self.state.read(cx).qt_openai_models.len(),
+            self.state.read(cx).qt_tts_models.len(),
+        );
         // The TTS voice input is its own source of truth (its edits commit
         // straight into settings) — only the pickers need reconciliation.
         // The TTS model catalog also changes when a /models load lands in

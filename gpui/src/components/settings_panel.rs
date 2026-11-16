@@ -14,7 +14,7 @@ pub fn dictionaries_tab_content(state: Entity<DictState>, cx: &mut gpui::App) ->
     let snapshot = state.read(cx).dictionaries.clone();
 
     let header_text = div()
-        .text_size(px(12.))
+        .text_size(px(13.))
         .text_color(colors::text_secondary())
         .child(SharedString::from(
             "Toggle dictionaries on or off, reorder, or view details.",
@@ -26,7 +26,7 @@ pub fn dictionaries_tab_content(state: Entity<DictState>, cx: &mut gpui::App) ->
         rows.push(
             div()
                 .py(px(20.))
-                .text_size(px(13.))
+                .text_size(px(14.))
                 .text_color(colors::text_secondary())
                 .child(SharedString::from(
                     "No .mdx files found. Use the Import tab to add dictionaries.",
@@ -71,7 +71,7 @@ pub fn dictionaries_tab_content(state: Entity<DictState>, cx: &mut gpui::App) ->
                         .px(px(14.))
                         .py(px(7.))
                         .rounded(px(6.))
-                        .text_size(px(13.))
+                        .text_size(px(14.))
                         .text_color(colors::text_secondary())
                         .border_1()
                         .border_color(colors::border())
@@ -88,7 +88,7 @@ pub fn dictionaries_tab_content(state: Entity<DictState>, cx: &mut gpui::App) ->
                         .px(px(14.))
                         .py(px(7.))
                         .rounded(px(6.))
-                        .text_size(px(13.))
+                        .text_size(px(14.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(colors::bg())
                         .bg(colors::primary())
@@ -109,7 +109,7 @@ fn dict_header_row() -> gpui::AnyElement {
         .w_full()
         .px(px(8.))
         .py(px(6.))
-        .text_size(px(11.))
+        .text_size(px(12.))
         .text_color(colors::text_secondary())
         .border_b_1()
         .border_color(colors::border())
@@ -164,7 +164,7 @@ fn dict_row(
         .child(
             div()
                 .flex_1()
-                .text_size(px(13.))
+                .text_size(px(14.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(colors::text())
                 .child(SharedString::from(display_name)),
@@ -232,7 +232,7 @@ fn toggle_checkbox(idx: usize, enabled: bool, state: Entity<DictState>) -> gpui:
             colors::bg()
         })
         .cursor_pointer()
-        .text_size(px(12.))
+        .text_size(px(13.))
         .text_color(colors::bg())
         .child(if enabled { "\u{2713}" } else { "" })
         .on_click(move |_, _, cx| {
@@ -260,7 +260,7 @@ fn detail_button(idx: usize, state: Entity<DictState>) -> gpui::AnyElement {
         .border_color(colors::border())
         .bg(colors::bg())
         .cursor_pointer()
-        .text_size(px(13.))
+        .text_size(px(14.))
         .text_color(colors::text_secondary())
         .child("\u{2630}")
         .hover(|s| s.bg(colors::surface()))
@@ -315,9 +315,15 @@ fn detail_button(idx: usize, state: Entity<DictState>) -> gpui::AnyElement {
                                     v_flex().gap(px(4.)).child(label("Display name")).child(
                                         h_flex()
                                             .gap(px(6.))
+                                            // The library input sizes itself; a
+                                            // definite wrapper height is what
+                                            // puts it on the settings control grid.
                                             .child(
                                                 div()
                                                     .flex_1()
+                                                    .h(px(
+                                                        crate::components::option_picker::CONTROL_H,
+                                                    ))
                                                     .child(Input::new(&input_entity).small()),
                                             )
                                             .child(
@@ -329,7 +335,7 @@ fn detail_button(idx: usize, state: Entity<DictState>) -> gpui::AnyElement {
                                                     .flex()
                                                     .items_center()
                                                     .justify_center()
-                                                    .text_size(px(12.))
+                                                    .text_size(px(13.))
                                                     .font_weight(FontWeight::SEMIBOLD)
                                                     .text_color(colors::bg())
                                                     .bg(colors::primary())
@@ -392,7 +398,7 @@ fn detail_button(idx: usize, state: Entity<DictState>) -> gpui::AnyElement {
 
 fn label(text: &str) -> gpui::AnyElement {
     div()
-        .text_size(px(11.))
+        .text_size(px(12.))
         .text_color(colors::text_secondary())
         .child(SharedString::from(text.to_string()))
         .into_any_element()
@@ -400,7 +406,7 @@ fn label(text: &str) -> gpui::AnyElement {
 
 fn value_text(text: &str) -> gpui::AnyElement {
     div()
-        .text_size(px(12.))
+        .text_size(px(13.))
         .text_color(colors::text())
         .child(SharedString::from(text.to_string()))
         .into_any_element()
@@ -478,7 +484,7 @@ fn arrow_button(
         .w(px(20.))
         .h(px(20.))
         .rounded(px(3.))
-        .text_size(px(9.))
+        .text_size(px(10.))
         .text_color(if disabled {
             colors::text_secondary()
         } else {

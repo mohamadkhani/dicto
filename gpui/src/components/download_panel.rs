@@ -38,7 +38,7 @@ fn loading_view(msg: &str) -> gpui::AnyElement {
         .gap(px(12.))
         .child(
             div()
-                .text_size(px(14.))
+                .text_size(px(15.))
                 .text_color(colors::text_secondary())
                 .child(SharedString::from(msg_text)),
         )
@@ -55,7 +55,7 @@ fn error_view(msg: &str, state: Entity<DictState>, _cx: &mut gpui::App) -> gpui:
         .gap(px(12.))
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(px(14.))
                 .text_color(colors::error())
                 .child(SharedString::from(format!("Error: {msg}"))),
         )
@@ -65,7 +65,7 @@ fn error_view(msg: &str, state: Entity<DictState>, _cx: &mut gpui::App) -> gpui:
                 .px(px(14.))
                 .py(px(6.))
                 .rounded(px(6.))
-                .text_size(px(12.))
+                .text_size(px(13.))
                 .text_color(colors::text())
                 .border_1()
                 .border_color(colors::border())
@@ -96,7 +96,7 @@ fn catalog_list(
         .gap(px(10.))
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(px(13.))
                 .text_color(colors::text_secondary())
                 .child("Download dictionaries and import them automatically."),
         )
@@ -135,7 +135,7 @@ fn download_status_bar(status: &DictDownloadStatus) -> Option<gpui::AnyElement> 
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(px(12.))
                                 .text_color(colors::text_secondary())
                                 .child(SharedString::from(format!(
                                     "Downloading {current_file}..."
@@ -143,7 +143,7 @@ fn download_status_bar(status: &DictDownloadStatus) -> Option<gpui::AnyElement> 
                         )
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(px(12.))
                                 .text_color(colors::text_secondary())
                                 .child(SharedString::from(format!(
                                     "{:.0}% \u{2014} {speed}",
@@ -156,14 +156,14 @@ fn download_status_bar(status: &DictDownloadStatus) -> Option<gpui::AnyElement> 
         ),
         DictDownloadStatus::Done => Some(
             div()
-                .text_size(px(11.))
+                .text_size(px(12.))
                 .text_color(colors::success())
                 .child("Download complete!")
                 .into_any_element(),
         ),
         DictDownloadStatus::Error(msg) => Some(
             div()
-                .text_size(px(11.))
+                .text_size(px(12.))
                 .text_color(colors::error())
                 .child(SharedString::from(format!("Error: {msg}")))
                 .into_any_element(),
@@ -240,7 +240,7 @@ fn catalog_row(
                         .items_center()
                         .child(
                             div()
-                                .text_size(px(13.))
+                                .text_size(px(14.))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(colors::text())
                                 .overflow_hidden()
@@ -253,14 +253,14 @@ fn catalog_row(
                                 .py(px(1.))
                                 .rounded(px(4.))
                                 .bg(colors::surface())
-                                .text_size(px(10.))
+                                .text_size(px(11.))
                                 .text_color(colors::text_secondary())
                                 .child(SharedString::from(lang_pair)),
                         ),
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(px(12.))
                         .text_color(colors::text_secondary())
                         .overflow_hidden()
                         .whitespace_nowrap()
@@ -272,19 +272,19 @@ fn catalog_row(
                         .gap(px(10.))
                         .child(
                             div()
-                                .text_size(px(10.))
+                                .text_size(px(11.))
                                 .text_color(colors::text_secondary())
                                 .child(SharedString::from(size)),
                         )
                         .child(
                             div()
-                                .text_size(px(10.))
+                                .text_size(px(11.))
                                 .text_color(colors::text_secondary())
                                 .child(SharedString::from(format!("v{}", entry.version))),
                         )
                         .child(
                             div()
-                                .text_size(px(10.))
+                                .text_size(px(11.))
                                 .text_color(colors::text_secondary())
                                 .child(SharedString::from(format!("\u{1F4DC} {}", entry.license))),
                         ),
@@ -302,7 +302,7 @@ fn download_button(
         .px(px(12.))
         .py(px(5.))
         .rounded(px(6.))
-        .text_size(px(11.))
+        .text_size(px(12.))
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(colors::bg())
         .bg(colors::primary())
@@ -318,7 +318,7 @@ fn downloading_badge() -> gpui::AnyElement {
         .px(px(12.))
         .py(px(5.))
         .rounded(px(6.))
-        .text_size(px(11.))
+        .text_size(px(12.))
         .text_color(colors::text_secondary())
         .bg(colors::surface())
         .child("Downloading...")
@@ -330,7 +330,7 @@ fn installed_badge() -> gpui::AnyElement {
         .px(px(12.))
         .py(px(5.))
         .rounded(px(6.))
-        .text_size(px(11.))
+        .text_size(px(12.))
         .text_color(colors::success())
         .bg(colors::surface())
         .child("\u{2713} Installed")
@@ -345,7 +345,7 @@ fn update_button(
         .px(px(12.))
         .py(px(5.))
         .rounded(px(6.))
-        .text_size(px(11.))
+        .text_size(px(12.))
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(colors::bg())
         .bg(colors::update())

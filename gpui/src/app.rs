@@ -1246,6 +1246,14 @@ fn cog_button(state: Entity<DictState>) -> gpui::AnyElement {
 /// (`DictState::settings_active_tab`). Callers can pre-select a tab by
 /// updating the state before calling this.
 fn open_settings_dialog(state: Entity<DictState>, window: &mut Window, cx: &mut gpui::App) {
+    // The dialog lives inside the main window, so it must never ask for more
+    // room than the window has: a fixed 660px height clipped the bottom of
+    // the card (and its last rows) when the window was shorter. Leave a
+    // small margin for the card's shadow and the console border.
+    let viewport = window.viewport_size();
+    let dialog_w = (f32::from(viewport.width) - 24.).clamp(360., 580.);
+    let dialog_h = (f32::from(viewport.height) - 24.).clamp(320., 660.);
+
     window.open_dialog(cx, move |dialog, _window, _cx| {
         let state = state.clone();
 
@@ -1253,8 +1261,8 @@ fn open_settings_dialog(state: Entity<DictState>, window: &mut Window, cx: &mut 
             .title(div().child("Settings"))
             // Wide enough for all six tabs; the Dialog default (448px)
             // clips the tab bar. `.w_full()` does not change the card width.
-            .w(px(520.))
-            .h(px(560.))
+            .w(px(dialog_w))
+            .h(px(dialog_h))
             .close_button(true)
             .overlay_closable(true)
             .content(move |content, window, cx| {

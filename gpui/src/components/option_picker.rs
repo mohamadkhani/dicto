@@ -72,6 +72,12 @@ pub struct PickerProps {
 /// Fixed geometry of the dropdown's rows and viewport — the scroll
 /// follow-the-cursor math depends on both.
 const ROW_H: f32 = 26.0;
+
+/// Height of one boxed control in a settings row: the dropdown trigger, the
+/// chips it collapses to, and every text field, filter segment, and action
+/// button beside them. One number keeps a column of fields aligned instead
+/// of each control sizing itself from its own font metrics.
+pub(crate) const CONTROL_H: f32 = 28.0;
 const MENU_H: f32 = 312.0;
 
 /// The adaptive picker: chips for lists of up to `chips_up_to` options, a
@@ -340,11 +346,12 @@ impl Render for OptionPicker {
             .items_center()
             .gap(px(6.))
             .w_full()
+            .h(px(CONTROL_H))
             .px(px(8.))
-            .py(px(3.))
             .rounded(px(4.))
             .cursor_pointer()
-            .text_size(px(11.))
+            .line_height(px(16.))
+            .text_size(px(12.))
             .bg(colors::surface())
             .text_color(colors::text())
             .border_1()
@@ -394,7 +401,7 @@ impl Render for OptionPicker {
                     .h(px(ROW_H))
                     .px(px(8.))
                     .cursor_pointer()
-                    .text_size(px(11.))
+                    .text_size(px(12.))
                     .when(is_selected, |s| {
                         s.text_color(colors::primary())
                             .font_weight(gpui::FontWeight::SEMIBOLD)
@@ -435,7 +442,7 @@ impl Render for OptionPicker {
                         .appearance(true)
                         .small()
                         .w_full()
-                        .text_size(px(11.))
+                        .text_size(px(12.))
                         .py(px(2.))
                         .bg(colors::bg())
                         .border_color(colors::border())
@@ -461,7 +468,7 @@ impl Render for OptionPicker {
                                         .flex()
                                         .justify_center()
                                         .py(px(12.))
-                                        .text_size(px(11.))
+                                        .text_size(px(12.))
                                         .text_color(colors::text_secondary())
                                         .child(SharedString::from("No matches")),
                                 )
@@ -485,7 +492,12 @@ impl Render for OptionPicker {
 
 /// One compact chip of the chip mode (list of up to `chips_up_to` options);
 /// commits its id through the shared `on_change`.
-fn chip(
+///
+/// Public within the crate because the settings tab renders its per-picker
+/// `Free only | All` filter with the very same chip: sharing the box means
+/// the filter can never be taller than the chips or the dropdown trigger it
+/// sits beside.
+pub(crate) fn chip(
     id: String,
     label: SharedString,
     selected: bool,
@@ -494,23 +506,28 @@ fn chip(
 ) -> gpui::AnyElement {
     let base = div()
         .id(id)
-        .px(px(8.))
-        .py(px(3.))
+        .flex()
+        .items_center()
+        .h(px(CONTROL_H - 2.0))
+        .px(px(10.))
         .rounded(px(4.))
         .cursor_pointer()
-        .text_size(px(11.))
+        .line_height(px(16.))
+        .text_size(px(12.))
+        .border_1()
         .on_click(move |_, window, cx| on_change(value.as_ref(), window, cx));
 
     if selected {
         base.bg(colors::primary())
             .text_color(colors::bg())
+            .border_color(colors::primary())
             .child(label)
             .into_any_element()
     } else {
         base.bg(colors::surface())
             .text_color(colors::text_secondary())
-            .border_1()
             .border_color(colors::border())
+            .hover(|s| s.bg(colors::hover()))
             .child(label)
             .into_any_element()
     }

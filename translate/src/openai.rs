@@ -448,6 +448,81 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// What a provider reports about a key's credit and free-tier usage.
+///
+/// OpenRouter answers `GET {base_url}/key` with this shape. Other
+/// OpenAI-compatible providers do not implement the endpoint; callers treat
+/// the error as "unknown" and keep the stored model.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct KeyInfo {
+    /// True when the key has never been topped up.
+    #[serde(default)]
+    pub is_free_tier: bool,
+    /// Credit left in dollars, when the provider reports a spend limit.
+    #[serde(default)]
+    pub limit_remaining: Option<f64>,
+    /// Free-model requests used and allowed today.
+    #[serde(default)]
+    pub free_model_daily_requests: Option<DailyFreeRequests>,
+}
+
+/// Today's free-model allowance for a key.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DailyFreeRequests {
+    #[serde(default)]
+    pub used: u64,
+    #[serde(default)]
+    pub limit: u64,
+    #[serde(default)]
+    pub remaining: u64,
+}
+
+impl KeyInfo {
+    /// Whether the key can pay for a model.
+    ///
+    /// A reported `limit_remaining` is authoritative. When the provider does
+    /// not report one, a key that is not on the free tier is assumed to have
+    /// credit, so a stored paid choice is never silently replaced.
+    pub fn has_credit(&self) -> bool {
+        match self.limit_remaining {
+            Some(left) => left > 0.0,
+            None => !self.is_free_tier,
+        }
+    }
+}
+
+/// Read a key's credit and free-tier usage from `GET {base_url}/key`.
+///
+/// Blocking, like the rest of this module; callers run it on a background
+/// executor. Accepts the wrapped `{"data": {…}}` body OpenRouter returns and
+/// a bare object, so OpenAI-compatible proxies that flatten the response work
+/// too.
+pub fn fetch_key_info(api_key: &str, base_url: &str) -> Result<KeyInfo, TranslateError> {
+    let url = format!("{}/key", base_url.trim_end_matches('/'));
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .user_agent("dicto-translate/0.1")
+        .build()?;
+    let resp = client.get(&url).bearer_auth(api_key).send()?;
+    let status = resp.status();
+    let body = resp.text().unwrap_or_default();
+    if !status.is_success() {
+        return Err(TranslateError::Api(format!(
+            "key API error {status}: {}",
+            truncate(&body, 200)
+        )));
+    }
+    let value: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+        TranslateError::Parse(format!(
+            "key response is not JSON: {e}; body: {}",
+            truncate(&body, 200)
+        ))
+    })?;
+    let object = value.get("data").cloned().unwrap_or(value);
+    serde_json::from_value(object)
+        .map_err(|e| TranslateError::Parse(format!("unexpected key response shape: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -491,5 +566,38 @@ mod tests {
         let t = OpenaiTranslator::builder().build();
         // Also falls back to default base URL
         assert!(t.is_configured());
+    }
+
+    fn parse_key(body: &str) -> KeyInfo {
+        let value: serde_json::Value = serde_json::from_str(body).unwrap();
+        let object = value.get("data").cloned().unwrap_or(value);
+        serde_json::from_value(object).unwrap()
+    }
+
+    #[test]
+    fn key_info_reads_the_wrapped_body() {
+        let info = parse_key(
+            r#"{"data":{"is_free_tier":true,"limit_remaining":0,
+                "free_model_daily_requests":{"used":3,"limit":50,"remaining":47}}}"#,
+        );
+        assert!(info.is_free_tier);
+        assert!(!info.has_credit());
+        let daily = info.free_model_daily_requests.unwrap();
+        assert_eq!((daily.used, daily.limit, daily.remaining), (3, 50, 47));
+    }
+
+    #[test]
+    fn key_info_accepts_a_flat_body() {
+        let info = parse_key(r#"{"is_free_tier":false,"limit_remaining":12.5}"#);
+        assert!(info.has_credit());
+    }
+
+    #[test]
+    fn credit_falls_back_to_the_free_tier_flag() {
+        // No spend limit reported: an unpaid key has no credit, a paid key does.
+        assert!(!parse_key(r#"{"is_free_tier":true}"#).has_credit());
+        assert!(parse_key(r#"{"is_free_tier":false}"#).has_credit());
+        // A reported zero beats the flag.
+        assert!(!parse_key(r#"{"is_free_tier":false,"limit_remaining":0}"#).has_credit());
     }
 }

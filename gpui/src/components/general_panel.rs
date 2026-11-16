@@ -20,14 +20,14 @@ pub fn general_tab_content(state: Entity<DictState>, cx: &mut gpui::App) -> gpui
         .pb(px(16.))
         .child(
             div()
-                .text_size(px(16.))
+                .text_size(px(18.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(colors::text())
                 .child(SharedString::from("General")),
         )
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(px(13.))
                 .text_color(colors::text_secondary())
                 .child(SharedString::from(
                     "Everyday settings: startup behavior, system shortcuts, \
@@ -75,7 +75,7 @@ pub fn general_tab_content(state: Entity<DictState>, cx: &mut gpui::App) -> gpui
 
 fn section_title(text: &str) -> gpui::AnyElement {
     div()
-        .text_size(px(12.))
+        .text_size(px(13.))
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(colors::text_secondary())
         .pt(px(8.))
@@ -92,7 +92,7 @@ fn hotkey_row(label: &str, hotkey: &str) -> gpui::AnyElement {
         .child(
             div()
                 .w(px(120.))
-                .text_size(px(12.))
+                .text_size(px(13.))
                 .text_color(colors::text_secondary())
                 .child(SharedString::from(label.to_string())),
         )
@@ -104,7 +104,7 @@ fn hotkey_row(label: &str, hotkey: &str) -> gpui::AnyElement {
                 .bg(colors::bg())
                 .border_1()
                 .border_color(colors::border())
-                .text_size(px(12.))
+                .text_size(px(13.))
                 .text_color(colors::text())
                 .child(SharedString::from(hotkey.to_string())),
         )
@@ -125,13 +125,13 @@ fn start_in_tray_section(state: &Entity<DictState>, _cx: &gpui::App) -> gpui::An
                 .gap(px(2.))
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(px(14.))
                         .text_color(colors::text())
                         .child(SharedString::from("Start Dicto in tray at login")),
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(px(12.))
                         .text_color(colors::text_secondary())
                         .child(SharedString::from(
                             "Dicto starts in the background at login with no window \nuse the tray icon or the shortcuts.",
@@ -165,7 +165,7 @@ fn system_shortcuts_section(state: &Entity<DictState>, cx: &gpui::App) -> gpui::
         .py(px(10.))
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(px(14.))
                 .text_color(colors::text())
                 .child(SharedString::from("Set up system shortcuts automatically")),
         )
@@ -183,7 +183,7 @@ fn system_shortcuts_section(state: &Entity<DictState>, cx: &gpui::App) -> gpui::
         None => {
             section = section.child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(px(12.))
                     .text_color(colors::text_secondary())
                     .child(SharedString::from("Setting up shortcuts…")),
             );
@@ -215,7 +215,7 @@ fn system_shortcuts_section(state: &Entity<DictState>, cx: &gpui::App) -> gpui::
             }
             section = section.child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(px(12.))
                     .text_color(colors::text_secondary())
                     .child(SharedString::from(text)),
             );
@@ -229,7 +229,7 @@ fn system_shortcuts_section(state: &Entity<DictState>, cx: &gpui::App) -> gpui::
                         .bg(colors::bg())
                         .border_1()
                         .border_color(colors::border())
-                        .text_size(px(10.))
+                        .text_size(px(11.))
                         .text_color(colors::text())
                         .child(SharedString::from(snippet)),
                 );
@@ -245,7 +245,7 @@ fn system_shortcuts_section(state: &Entity<DictState>, cx: &gpui::App) -> gpui::
     let _ = (state, cx);
     div()
         .pt(px(8.))
-        .text_size(px(11.))
+        .text_size(px(12.))
         .text_color(colors::text_secondary())
         .child(SharedString::from(
             "No extra setup is needed on this platform — shortcuts are \
@@ -267,7 +267,7 @@ fn word_lookup_section(state: &Entity<DictState>, cx: &gpui::App) -> gpui::AnyEl
         .py(px(10.))
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(px(14.))
                 .text_color(colors::text())
                 .child(SharedString::from("Enable Word Lookup")),
         )
@@ -279,7 +279,7 @@ fn word_lookup_section(state: &Entity<DictState>, cx: &gpui::App) -> gpui::AnyEl
     if registering {
         section = section.child(
             div()
-                .text_size(px(11.))
+                .text_size(px(12.))
                 .text_color(colors::text_secondary())
                 .child(SharedString::from("Registering hotkey…")),
         );
@@ -302,7 +302,7 @@ fn quick_translate_section(state: &Entity<DictState>, cx: &gpui::App) -> gpui::A
         .py(px(10.))
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(px(14.))
                 .text_color(colors::text())
                 .child(SharedString::from("Enable Quick Translate")),
         )
@@ -344,7 +344,7 @@ fn consent_segment(
         .id(id)
         .px(px(14.))
         .py(px(7.))
-        .text_size(px(13.))
+        .text_size(px(14.))
         .cursor_pointer()
         .child(label);
     // gpui clipping is a rectangular mask and ignores border radius, so the
@@ -382,7 +382,7 @@ fn telemetry_section(state: &Entity<DictState>) -> gpui::AnyElement {
         mdict_rs::settings::TelemetryConsent::OptedIn
     );
     let consent_note = div()
-        .text_size(px(11.))
+        .text_size(px(12.))
         .text_color(colors::text_secondary())
         .child(SharedString::from(
             "Anonymous usage data helps improve Dicto. No personal information, \
@@ -403,7 +403,7 @@ fn telemetry_section(state: &Entity<DictState>) -> gpui::AnyElement {
         .border_color(colors::border())
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(px(14.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(colors::text())
                 .child(SharedString::from("Help improve Dicto")),
@@ -417,7 +417,7 @@ fn telemetry_section(state: &Entity<DictState>) -> gpui::AnyElement {
                         .px(px(14.))
                         .py(px(7.))
                         .rounded(px(6.))
-                        .text_size(px(13.))
+                        .text_size(px(14.))
                         .text_color(colors::primary())
                         .border_1()
                         .border_color(colors::border())
@@ -499,7 +499,7 @@ fn open_telemetry_details_dialog(window: &mut Window, cx: &mut gpui::App) {
                         .px(px(14.))
                         .py(px(7.))
                         .rounded(px(6.))
-                        .text_size(px(13.))
+                        .text_size(px(14.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(colors::bg())
                         .bg(colors::primary())
@@ -553,13 +553,13 @@ fn details_row(label: &str, value: &str) -> gpui::AnyElement {
         .justify_between()
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(px(12.))
                 .text_color(colors::text_secondary())
                 .child(SharedString::from(label.to_string())),
         )
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(px(12.))
                 .text_color(colors::text())
                 .child(SharedString::from(value.to_string())),
         )
@@ -569,7 +569,7 @@ fn details_row(label: &str, value: &str) -> gpui::AnyElement {
 fn privacy_list(title: &str, items: &[&str]) -> gpui::AnyElement {
     let mut list = v_flex().gap(px(3.)).child(
         div()
-            .text_size(px(11.))
+            .text_size(px(12.))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(colors::text())
             .child(SharedString::from(title.to_string())),
@@ -578,17 +578,17 @@ fn privacy_list(title: &str, items: &[&str]) -> gpui::AnyElement {
         list = list.child(
             h_flex()
                 .gap(px(6.))
-                .text_size(px(11.))
+                .text_size(px(12.))
                 .text_color(colors::text_secondary())
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(px(12.))
                         .text_color(colors::text_secondary())
                         .child("•"),
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(px(12.))
                         .text_color(colors::text_secondary())
                         .child(SharedString::from(*item)),
                 ),

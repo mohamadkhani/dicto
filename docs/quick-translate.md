@@ -363,6 +363,7 @@ source-language voice hint; the Translation row uses the target language.
 | `api_base_url` | `String` | `""` | Required for OpenAI-compatible; optional for Anthropic. |
 | `model` | `String` | `"claude-sonnet-4-6"` | Model name. |
 | `target_lang` | `String` | `"English"` | Target language for translation. |
+| `free_only` | `bool` | `true` | Offer only `:free` models in the translation picker. A key without credit stays on free models either way. |
 | `tts` | `TtsSettings` | (see below) | TTS configuration. |
 
 ### `TtsSettings`
@@ -373,6 +374,7 @@ source-language voice hint; the Translation row uses the target language.
 | `api_key` | `String` | `""` | TTS provider API key. |
 | `api_base_url` | `String` | `"https://api.openai.com/v1"` | TTS base URL. |
 | `model` | `String` | `"gpt-4o-mini-tts"` | TTS model. |
+| `free_only` | `bool` | `true` | Offer only `:free` models in the voice picker. Independent of the translation switch. |
 | `voice` | `String` | `"alloy"` | Voice name. |
 
 The Quick Translate settings tab (`gpui/src/components/quick_translate_panel.rs`)
@@ -381,6 +383,42 @@ hotkey backend), provider/model/key rows, a base-url row that appears only for
 the OpenAI-compatible provider, a target-language selector (preset list plus
 free-text), a "⚠ API key is required" warning when enabled without a key, and a
 TTS section (toggle + api-key + provider/model/base-url preset + voice).
+
+The model pickers load their catalogs by themselves. The tab fetches
+`{base_url}/models` on first open and again when the endpoint or key changes
+(the TTS list only while AI TTS is on), waiting one second so a burst of typing
+costs one request. "Refresh models" and "Refresh TTS models" re-run the load on
+demand; a failed automatic attempt is not retried in a loop. The popup's
+Options panel shares the same cache and skips a fetch the tab already made.
+
+### Free-model defaults
+
+`src/settings/free.rs` holds the preference lists (`FREE_TEXT_MODELS`,
+`FREE_TTS_MODELS`, `PAID_TEXT_MODELS`) and the reconciler
+(`pick_text_model` / `pick_tts_model`). The lists are preferences, not facts:
+whatever the endpoint returns from `/models` decides what is offered, and an
+unmatched list returns `None` instead of an invented id.
+
+Each model picker carries its own `Free only | All` segment in the same row, so
+the filter and the list it narrows are never confused: turning it on for
+translation never hides the voice models, and the reverse. The segment filters
+that picker to ids ending in `:free`; when it has to replace a paid selection
+it says so under the picker ("Switched from X to Y (free)") instead of
+changing the model silently. It is a no-op for endpoints that publish no free
+variant (OpenAI, local servers), and the line under the picker says that
+explicitly.
+
+Under each picker, the count line reports what the list actually offers —
+"Showing 6 free of 422 models" with the filter on, "All 422 models" with it
+off — so the endpoint's total is never mistaken for the number of rows the
+picker opens. A finished `/models` load reports "Model list updated" in neutral
+text; green is reserved for the Test buttons, whose result is the user's own
+input working.
+
+Pressing Test also probes `GET {base_url}/key`. When the provider reports no
+credit, a paid model is replaced with the best free one and the status line
+says so; the popup then shows the free-tier requests left today. Providers
+without that endpoint (OpenAI) skip the probe and keep the stored model.
 
 ---
 

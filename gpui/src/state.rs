@@ -232,10 +232,11 @@ pub struct DictState {
     /// Live result of the [Test] button next to the TTS API key field in
     /// the settings tab.
     pub qt_tts_test: QtKeyTest,
-    /// Live result of the "Load models" button next to the Model picker
-    /// (OpenAI-compatible provider only).
+    /// Live result of the "Refresh models" action next to the Model
+    /// picker (OpenAI-compatible provider only).
     pub qt_models_load: QtKeyTest,
-    /// Live result of the "Load models" button under the TTS Model picker.
+    /// Live result of the "Refresh TTS models" action under the TTS Model
+    /// picker.
     pub qt_tts_models_load: QtKeyTest,
     /// Model ids fetched from the OpenAI-compatible /models endpoint.
     /// Empty = never loaded → the model picker falls back to the hardcoded
@@ -245,9 +246,27 @@ pub struct DictState {
     /// voices each model publishes. Empty = never loaded → the TTS model
     /// picker falls back to the hardcoded list.
     pub qt_tts_models: Vec<dicto_translate::openai::TtsModel>,
-    /// Set once per app run after the automatic models/voices load (the
-    /// popup triggers it on open) — prevents repeated background fetches.
+    /// Credit and free-tier usage reported by the provider's `/key`
+    /// endpoint, refreshed by the last successful Test. `None` when the
+    /// provider has no such endpoint or the probe has not run yet.
+    pub qt_key_info: Option<dicto_translate::openai::KeyInfo>,
+    /// Set once per app run after the popup's automatic models/voices
+    /// load — prevents repeated background fetches from its poll tick.
     pub qt_models_autoloaded: bool,
+    /// Endpoint + key the translation model list was last loaded (or is
+    /// being loaded) for. The settings tab re-runs the load when this no
+    /// longer matches the live settings, which covers switching providers
+    /// and pasting a key after the first attempt failed.
+    pub qt_models_loaded_for: Option<(String, String)>,
+    /// Same bookkeeping for the TTS model list, which has its own
+    /// endpoint and key.
+    pub qt_tts_models_loaded_for: Option<(String, String)>,
+    /// Note under the translation picker after its free-only filter moved
+    /// the selection off a paid model, e.g. "Switched from A to B". Cleared
+    /// on the next manual pick or filter change.
+    pub qt_free_note: Option<String>,
+    /// Same note for the voice picker, which switches on its own.
+    pub qt_free_note_tts: Option<String>,
 }
 
 /// Outcome of a settings-tab key test. `Ok`/`Err` carry a short,
@@ -342,7 +361,12 @@ impl DictState {
             qt_tts_models_load: QtKeyTest::Idle,
             qt_openai_models: Vec::new(),
             qt_tts_models: Vec::new(),
+            qt_key_info: None,
             qt_models_autoloaded: false,
+            qt_models_loaded_for: None,
+            qt_tts_models_loaded_for: None,
+            qt_free_note: None,
+            qt_free_note_tts: None,
             playback_source: crate::playback::PlaybackController::default(),
             playback_translation: crate::playback::PlaybackController::default(),
         };

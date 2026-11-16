@@ -37,7 +37,7 @@ fn hero_section() -> gpui::AnyElement {
                 .gap(px(4.))
                 .child(
                     div()
-                        .text_size(px(20.))
+                        .text_size(px(22.))
                         .font_weight(FontWeight::BOLD)
                         .text_color(colors::text())
                         .child("Dicto"),
@@ -50,7 +50,7 @@ fn hero_section() -> gpui::AnyElement {
                         .bg(colors::surface())
                         .border_1()
                         .border_color(colors::border())
-                        .text_size(px(11.))
+                        .text_size(px(12.))
                         .text_color(colors::text_secondary())
                         .child(SharedString::from(VERSION.to_string())),
                 ),
@@ -77,7 +77,7 @@ fn description_card() -> gpui::AnyElement {
         .child(
             div()
                 .text_center()
-                .text_size(px(12.))
+                .text_size(px(13.))
                 .text_color(colors::text_secondary())
                 .child(SharedString::from(
                     "A fast, offline desktop dictionary for Linux. \
@@ -113,13 +113,13 @@ fn info_row(label: &str, value: &str, show_divider: bool) -> gpui::AnyElement {
         .justify_between()
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(px(13.))
                 .text_color(colors::text_secondary())
                 .child(SharedString::from(label.to_string())),
         )
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(px(13.))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(colors::text())
                 .child(SharedString::from(value.to_string())),
@@ -143,14 +143,14 @@ fn source_row() -> gpui::AnyElement {
         .justify_between()
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(px(13.))
                 .text_color(colors::text_secondary())
                 .child("Source"),
         )
         .child(
             div()
                 .id("about-source-link")
-                .text_size(px(12.))
+                .text_size(px(13.))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(colors::primary())
                 .cursor_pointer()
