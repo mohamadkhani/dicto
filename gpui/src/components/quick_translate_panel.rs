@@ -1122,12 +1122,7 @@ fn input_row(
         )
         // Flexible: the field grows with the panel instead of leaving the
         // right half of the row empty.
-        .child(
-            div()
-                .flex_1()
-                .min_w(px(0.))
-                .child(el),
-        )
+        .child(div().flex_1().min_w(px(0.)).child(el))
         .into_any_element()
 }
 

@@ -223,41 +223,29 @@ mod tests {
         assert_eq!(clean_selection("Hello \"world\""), "Hello \"world\"");
         // Emoji / symbols removed, bullets removed
         assert_eq!(clean_selection("Hello 👍 world"), "Hello world");
-        assert_eq!(clean_selection("• item one • item two"), "item one item two");
+        assert_eq!(
+            clean_selection("• item one • item two"),
+            "item one item two"
+        );
         // Lone symbols removed entirely
         assert_eq!(clean_selection("Hello ⚠"), "Hello");
         assert_eq!(clean_selection("★★★ Hello"), "Hello");
         // Leading/trailing whitespace trimmed
         assert_eq!(clean_selection("  hello world  "), "hello world");
         // Persian (Farsi) text is preserved as readable words
-        assert_eq!(
-            clean_selection("سلام دنیا"),
-            "سلام دنیا"
-        );
+        assert_eq!(clean_selection("سلام دنیا"), "سلام دنیا");
         // Persian mixed with English works
-        assert_eq!(
-            clean_selection("Hello سلام دنیا"),
-            "Hello سلام دنیا"
-        );
+        assert_eq!(clean_selection("Hello سلام دنیا"), "Hello سلام دنیا");
         // Persian with line breaks collapsed
-        assert_eq!(
-            clean_selection("سلام\nدنیا\nخوبی"),
-            "سلام دنیا خوبی"
-        );
+        assert_eq!(clean_selection("سلام\nدنیا\nخوبی"), "سلام دنیا خوبی");
         // Persian with ellipsis/dash normalized
         assert_eq!(
             clean_selection("کتاب … داستان — خوب"),
             "کتاب ... داستان - خوب"
         );
         // Persian with emoji removed
-        assert_eq!(
-            clean_selection("کتاب 👍 داستان"),
-            "کتاب داستان"
-        );
+        assert_eq!(clean_selection("کتاب 👍 داستان"), "کتاب داستان");
         // Persian smart quotes normalized
-        assert_eq!(
-            clean_selection("«کتاب»"),
-            "\"کتاب\""
-        );
+        assert_eq!(clean_selection("«کتاب»"), "\"کتاب\"");
     }
 }
