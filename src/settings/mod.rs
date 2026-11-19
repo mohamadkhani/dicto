@@ -16,6 +16,7 @@ use tracing::{info, warn};
 use crate::config::{APP_NAME, discover_mdx_files};
 
 pub mod free;
+pub mod providers;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {

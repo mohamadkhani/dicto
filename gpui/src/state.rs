@@ -267,6 +267,15 @@ pub struct DictState {
     pub qt_free_note: Option<String>,
     /// Same note for the voice picker, which switches on its own.
     pub qt_free_note_tts: Option<String>,
+    /// The guided "turn on Quick Translate" card: which step is open, which
+    /// provider was picked, and the last reachability probe. Kept on the
+    /// state so a re-render (or a settings round-trip) never loses the
+    /// user's place mid-setup.
+    pub qt_setup: crate::components::qt_setup::SetupState,
+    /// False while the guided card should replace the raw provider form.
+    /// Starts false when nothing is configured; "Done" turns it on, and
+    /// "Run setup again" in the full form turns it back off.
+    pub qt_setup_done: bool,
 }
 
 /// Outcome of a settings-tab key test. `Ok`/`Err` carry a short,
@@ -301,6 +310,18 @@ impl DictState {
         let auto_shortcuts = settings.auto_shortcuts;
         let word_lookup_hint_dismissed = settings.word_lookup_hint_dismissed;
         let start_in_tray_hint_dismissed = settings.start_in_tray_hint_dismissed;
+
+        // The guided setup card starts where the stored configuration left
+        // off: on the provider list with nothing configured, on the key step
+        // for a known provider without a key, and out of the way once a key
+        // (or a local server) is in place.
+        let qt_setup = crate::components::qt_setup::SetupState::detect(
+            &qt_settings.api_base_url,
+            &qt_settings.api_key,
+        );
+        let qt_setup_done = !qt_settings.api_base_url.trim().is_empty()
+            && (!qt_settings.api_key.is_empty()
+                || mdict_rs::settings::providers::is_local_url(&qt_settings.api_base_url));
 
         let state = Self {
             word_list_scroll: gpui::ScrollHandle::new(),
@@ -367,6 +388,8 @@ impl DictState {
             qt_tts_models_loaded_for: None,
             qt_free_note: None,
             qt_free_note_tts: None,
+            qt_setup,
+            qt_setup_done,
             playback_source: crate::playback::PlaybackController::default(),
             playback_translation: crate::playback::PlaybackController::default(),
         };
@@ -455,11 +478,14 @@ impl DictState {
     }
 
     /// Whether the Quick Translate AI provider is fully configured:
-    /// API key and base URL present. The setup hint banner shows while
-    /// this is false.
+    /// a base URL and (unless the server is local) an API key. The setup
+    /// hint banner shows while this is false.
     pub fn translation_ready(&self) -> bool {
         let qt = &self.quick_translate;
-        !qt.api_key.is_empty() && !qt.api_base_url.is_empty()
+        if qt.api_base_url.trim().is_empty() {
+            return false;
+        }
+        !qt.api_key.is_empty() || mdict_rs::settings::providers::is_local_url(&qt.api_base_url)
     }
 
     /// Reload the hotkey registrations after settings change.

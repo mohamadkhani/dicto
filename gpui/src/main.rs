@@ -137,6 +137,12 @@ fn take_ipc_show_token() -> Option<String> {
         .and_then(|mut g| g.take())
 }
 
+/// The dictionary (main) window, for callers outside this module: the popup's
+/// "Set up" action raises it and opens the settings dialog there.
+pub(crate) fn dict_window() -> Option<gpui::AnyWindowHandle> {
+    DICT_WINDOW.lock().ok().and_then(|g| *g)
+}
+
 /// The dictionary (main) window. Tray "Show Dictionary" raises+focuses THIS
 /// window (raising whatever window happens to exist would hand keyboard
 /// focus to a popup) and reopens it after the user closes it — the app

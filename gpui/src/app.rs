@@ -891,8 +891,8 @@ fn ai_setup_banner(state: &Entity<DictState>, cx: &Context<DictApp>) -> gpui::An
                         .text_size(px(12.))
                         .text_color(colors::text_secondary())
                         .child(SharedString::from(
-                            "Quick Translate: translate selected text anywhere and \
-                             hear it spoken — add an AI key to enable it.",
+                            "Quick Translate is one key away — translate selected \
+                             text anywhere and hear it read aloud.",
                         )),
                 ),
         )
@@ -911,12 +911,15 @@ fn ai_setup_banner(state: &Entity<DictState>, cx: &Context<DictApp>) -> gpui::An
                         .border_1()
                         .border_color(colors::border())
                         .hover(|s| s.bg(colors::hover()))
-                        .child("Configure")
+                        .child("Set up")
                         .on_click(cx.listener(move |_this, _ev, window, cx| {
                             cx.update_entity(&configure_state, |s, cx| {
-                                // Quick Translate advanced settings.
+                                // Start from the provider list, not from a
+                                // half-filled step left by an earlier try.
                                 s.settings_active_tab =
                                     crate::components::settings_window::TAB_QUICK_TRANSLATE;
+                                s.qt_setup_done = false;
+                                s.qt_setup = crate::components::qt_setup::SetupState::default();
                                 cx.notify();
                             });
                             open_settings_dialog(configure_state.clone(), window, cx);
@@ -1341,6 +1344,32 @@ fn open_settings_dialog(state: Entity<DictState>, window: &mut Window, cx: &mut 
                         }),
                 )
             })
+    });
+}
+
+/// Open the main window on the Quick Translate tab and restart the guided
+/// setup card.
+///
+/// Called from the popup's "Set up" CTA, which has no settings dialog of its
+/// own. The popup shares `DictState` with the main window, so the state change
+/// is visible in both; raising the main window is what makes the result
+/// visible rather than happening behind the floating popup.
+pub(crate) fn open_quick_translate_setup(state: Entity<DictState>, cx: &mut gpui::App) {
+    state.update(cx, |s, cx| {
+        s.settings_active_tab = crate::components::settings_window::TAB_QUICK_TRANSLATE;
+        s.qt_setup_done = false;
+        s.qt_setup = crate::components::qt_setup::SetupState::default();
+        cx.notify();
+    });
+
+    let Some(handle) = crate::dict_window() else {
+        // Tray-only session with no dictionary window open: the state change
+        // above is still applied, so the next window shows the card.
+        return;
+    };
+    let _ = handle.update(cx, |_, window, cx| {
+        window.activate_window();
+        open_settings_dialog(state.clone(), window, cx);
     });
 }
 

@@ -7,6 +7,7 @@ pub mod general_panel;
 pub mod import_panel;
 pub mod option_picker;
 pub mod qt_catalog;
+pub mod qt_setup;
 pub mod quick_translate_panel;
 pub mod search_bar;
 pub mod settings_panel;

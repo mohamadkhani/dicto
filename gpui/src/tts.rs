@@ -48,7 +48,11 @@ pub(crate) fn synthesize_bytes(
     lang_hint: Option<&str>,
     tts: Option<&TtsSettings>,
 ) -> anyhow::Result<Vec<u8>> {
-    if let Some(tts) = tts.filter(|t| t.enabled && !t.api_key.is_empty()) {
+    // An English-only voice reading Persian text is worse than the system
+    // voice, so the language check comes before the AI attempt.
+    if let Some(tts) =
+        tts.filter(|t| t.enabled && !t.api_key.is_empty() && ai_voice_speaks(lang_hint, t))
+    {
         match AiTtsClient::new(tts).synthesize(text) {
             Ok(bytes) => {
                 info!(model = %tts.model, voice = %tts.voice, "tts: synthesized via AI");
@@ -76,6 +80,24 @@ fn speak_blocking(
 // ---------------------------------------------------------------------------
 // AI TTS (OpenAI-compatible /audio/speech)
 // ---------------------------------------------------------------------------
+
+/// Whether the configured AI voice can be trusted for this language.
+///
+/// Providers describe voices, not languages, so there is no general answer.
+/// The one fact the app already documents is that OpenRouter's free voices
+/// are English-only (`settings::free::FREE_TTS_MODELS`): sending Persian text
+/// to them produces a mangled English reading, which is worse than the
+/// platform voice. For those, the Persian side falls back to the system
+/// voice; every other combination stays on the AI voice.
+pub fn ai_voice_speaks(lang_hint: Option<&str>, tts: &TtsSettings) -> bool {
+    let primary = lang_hint
+        .map(|lang| lang.split('-').next().unwrap_or(lang))
+        .unwrap_or("");
+    if primary != "fa" {
+        return true;
+    }
+    !mdict_rs::settings::free::FREE_TTS_MODELS.contains(&tts.model.as_str())
+}
 
 /// Client for an OpenAI-compatible text-to-speech endpoint.
 ///
@@ -248,4 +270,36 @@ fn play_bytes(bytes: &[u8]) -> anyhow::Result<()> {
     sink.append(decoder);
     sink.sleep_until_end();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tts_with_model(model: &str) -> TtsSettings {
+        TtsSettings {
+            enabled: true,
+            api_key: "sk-1".into(),
+            model: model.into(),
+            ..TtsSettings::default()
+        }
+    }
+
+    #[test]
+    fn english_voices_are_used_for_every_language_except_known_gaps() {
+        let tts = tts_with_model("gemini-3.8-flash-lite-tts");
+        assert!(ai_voice_speaks(Some("en"), &tts));
+        assert!(ai_voice_speaks(Some("fa"), &tts));
+        assert!(ai_voice_speaks(None, &tts));
+    }
+
+    #[test]
+    fn an_english_only_free_voice_falls_back_for_persian() {
+        let model = mdict_rs::settings::free::FREE_TTS_MODELS[0];
+        let tts = tts_with_model(model);
+        assert!(ai_voice_speaks(Some("en"), &tts));
+        assert!(ai_voice_speaks(Some("en-US"), &tts));
+        assert!(!ai_voice_speaks(Some("fa"), &tts));
+        assert!(!ai_voice_speaks(Some("fa-IR"), &tts));
+    }
 }

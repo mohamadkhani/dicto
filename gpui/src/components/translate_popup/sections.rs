@@ -238,6 +238,30 @@ pub(crate) fn translate_button(
         .into_any_element()
 }
 
+/// Replacement for the Translate button while no AI provider is configured.
+///
+/// It opens the main window on the guided setup card instead of starting a
+/// request that cannot work. The popup itself has no settings dialog (it is
+/// a tiny floating window), so this is the one CTA it can offer.
+pub(crate) fn setup_button(state: Entity<DictState>) -> gpui::AnyElement {
+    div()
+        .id("qt-setup-btn")
+        .px(px(16.))
+        .py(px(6.))
+        .rounded(px(6.))
+        .bg(colors::primary())
+        .text_size(px(12.))
+        .text_color(gpui::rgb(0x0f1117))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .cursor_pointer()
+        .hover(|s| s.opacity(0.9))
+        .child(SharedString::from("Set up"))
+        .on_click(move |_ev, _window, cx| {
+            crate::app::open_quick_translate_setup(state.clone(), cx);
+        })
+        .into_any_element()
+}
+
 fn divider() -> gpui::AnyElement {
     div().h(px(1.)).bg(colors::border()).into_any_element()
 }

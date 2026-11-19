@@ -235,6 +235,24 @@ pub fn quick_translate_tab_content(
         .overflow_y_scrollbar();
     body = body.child(header);
     body = body.child(divider());
+
+    // Nothing is configured yet: the guided card is the whole tab. It owns
+    // the key, the endpoint, the model, and the voice until it is done, so
+    // the raw form cannot be the first thing a new user meets.
+    if !state.read(cx).qt_setup_done {
+        body = body.child(crate::components::qt_setup::setup_card(
+            state.clone(),
+            window,
+            cx,
+        ));
+        return div()
+            .flex_1()
+            .min_h(px(0.))
+            .w_full()
+            .child(body)
+            .into_any_element();
+    }
+
     body = body.child(section_title("Translation"));
     body = body.child(base_url_row);
     body = body.child(api_key_row);
@@ -263,6 +281,7 @@ pub fn quick_translate_tab_content(
         body = body.child(tts_test_row);
     }
     body = body.child(tts_note);
+    body = body.child(crate::components::qt_setup::run_setup_again(state.clone()));
 
     // Outer div participates in the parent's flex layout (flex_1 = remaining
     // height). The overflow wrapper from overflow_y_scroll loses flex_grow, so
@@ -617,11 +636,14 @@ fn free_tts_model_after_probe(
 /// Send one short sample through the configured translation provider and
 /// record the outcome in `qt_translation_test`. Credentials are tested
 /// regardless of the feature's enable toggle.
-fn run_translation_test(state: Entity<DictState>, cx: &mut gpui::App) {
+pub(crate) fn run_translation_test(state: Entity<DictState>, cx: &mut gpui::App) {
     use dicto_translate::TranslationRequest;
 
     let settings = state.read(cx).quick_translate.clone();
-    if settings.api_key.is_empty() {
+    // A local server needs no key; every hosted provider does.
+    if settings.api_key.is_empty()
+        && !mdict_rs::settings::providers::is_local_url(&settings.api_base_url)
+    {
         state.update(cx, |s, cx| {
             s.qt_translation_test = QtKeyTest::Err("API key is empty".into());
             cx.notify();
@@ -697,6 +719,12 @@ fn run_translation_test(state: Entity<DictState>, cx: &mut gpui::App) {
                     (Err(e), None) => QtKeyTest::Err(shorten(&e.to_string(), 96)),
                 };
                 s.qt_translation_test = status;
+                // The guided card steps forward on the first passing test
+                // and stays there; later model changes must not push the
+                // user back to the key field.
+                if matches!(s.qt_translation_test, QtKeyTest::Ok(_)) {
+                    s.qt_setup.connected = true;
+                }
                 if key_info.is_some() {
                     s.qt_key_info = key_info;
                 }
@@ -842,7 +870,12 @@ fn ensure_qt_inputs(
         let s = state.clone();
         move |v: String, cx: &mut gpui::App| {
             s.update(cx, |st, cx| {
+                let old_key = st.quick_translate.api_key.clone();
                 st.quick_translate.api_key = v;
+                // One key covers translation and voice by default: while the
+                // voice still follows the shared key, it follows this edit
+                // too. A key typed into the TTS section stops that.
+                mdict_rs::settings::providers::sync_shared_key(&mut st.quick_translate, &old_key);
                 // Credit and quota belonged to the previous key, and so
                 // did any note about a model it switched.
                 st.qt_key_info = None;
@@ -859,7 +892,14 @@ fn ensure_qt_inputs(
         let s = state.clone();
         move |v: String, cx: &mut gpui::App| {
             s.update(cx, |st, cx| {
+                let old_base = st.quick_translate.api_base_url.clone();
                 st.quick_translate.api_base_url = v;
+                // Same shared-by-default rule for the endpoint: a voice
+                // endpoint of its own is left alone.
+                mdict_rs::settings::providers::sync_shared_base_url(
+                    &mut st.quick_translate,
+                    &old_base,
+                );
                 // A different endpoint reports its own credit and quota,
                 // and lists its own models.
                 st.qt_key_info = None;
@@ -1083,7 +1123,7 @@ fn reconcile(
 /// Same geometry as [`labeled_row`] (label 120px + 12px gap + 260px content)
 /// and the same size tokens as the OptionPicker's dropdown/chips (small,
 /// 11px text, 3px vertical padding) so inputs and pickers read as one.
-fn input_row(
+pub(crate) fn input_row(
     label: &str,
     input: &Entity<InputState>,
     masked: bool,
@@ -1154,7 +1194,7 @@ fn labeled_row(label: &str, content: gpui::AnyElement) -> gpui::AnyElement {
 /// ([`CONTROL_H`]); its segments fill the inside instead of sizing
 /// themselves, so the group can never end up taller or shorter than the
 /// control it belongs to.
-fn free_filter_segments(
+pub(crate) fn free_filter_segments(
     id: &'static str,
     free_only: bool,
     on_click: impl Fn(bool, &mut gpui::App) + 'static,
@@ -1208,7 +1248,7 @@ fn free_filter_segments(
 
 /// Small secondary line under a picker: counts, or the note left by a
 /// filter that had to move the selection.
-fn hint_line(text: String, color: gpui::Hsla) -> gpui::AnyElement {
+pub(crate) fn hint_line(text: String, color: gpui::Hsla) -> gpui::AnyElement {
     div()
         .text_size(px(12.))
         .text_color(color)
@@ -1227,7 +1267,7 @@ const CHIPS_UP_TO: usize = 4;
 /// keeps hand-edited values visible. The picker entity persists on
 /// `DictState` and is reconciled from the live settings on every render
 /// (provider switch, popup edits, settings reload).
-fn model_picker_row(
+pub(crate) fn model_picker_row(
     settings: &mdict_rs::settings::QuickTranslateSettings,
     state: &Entity<DictState>,
     window: &mut Window,
@@ -1359,7 +1399,7 @@ fn model_picker_items(
 
 /// The published voices of the current TTS model, from the /models load.
 /// Empty when nothing was loaded or the model publishes no voice list.
-fn tts_voices_for(
+pub(crate) fn tts_voices_for(
     settings: &mdict_rs::settings::QuickTranslateSettings,
     state: &Entity<DictState>,
     cx: &gpui::App,
@@ -1377,7 +1417,7 @@ fn tts_voices_for(
 /// TTS voice picker over the current model's published voices (same
 /// adaptive [`OptionPicker`] as the other rows). Commits the voice id and
 /// invalidates stale playing clips.
-fn tts_voice_picker_row(
+pub(crate) fn tts_voice_picker_row(
     settings: &mdict_rs::settings::QuickTranslateSettings,
     state: &Entity<DictState>,
     window: &mut Window,
@@ -1442,7 +1482,7 @@ fn tts_voice_picker_row(
 /// available, else the hardcoded OpenAI TTS fallback list — plus a
 /// "Custom: …" item so a hand-typed model stays visible. The picker entity
 /// persists on `DictState` and is reconciled from the live settings.
-fn tts_model_picker_row(
+pub(crate) fn tts_model_picker_row(
     settings: &mdict_rs::settings::QuickTranslateSettings,
     state: &Entity<DictState>,
     window: &mut Window,

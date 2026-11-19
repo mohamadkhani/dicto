@@ -61,6 +61,7 @@ pub const MAX_TEXT_LENGTH: usize = 10_000;
 
 pub mod null;
 pub mod openai;
+pub mod reach;
 
 pub use null::NullTranslator;
 

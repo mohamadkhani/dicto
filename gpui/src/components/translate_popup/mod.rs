@@ -539,6 +539,10 @@ pub fn translate_popup(state_entity: &Entity<DictState>, props: PopupProps) -> g
     } = props;
     let state = &state;
     let settings = &settings;
+    // No AI provider yet: the popup can still show and copy the selection,
+    // but Translate has nothing to call. Offer the one action that fixes it.
+    let needs_setup = settings.api_key.trim().is_empty()
+        && !mdict_rs::settings::providers::is_local_url(&settings.api_base_url);
     let target_lang = settings.target_lang.clone();
     let tts = settings.tts.clone();
     let card = v_flex()
@@ -628,11 +632,11 @@ pub fn translate_popup(state_entity: &Entity<DictState>, props: PopupProps) -> g
             .pt(px(2.))
             .pb(px(2.))
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(sections::translate_button(
-                original,
-                state_entity.clone(),
-                busy,
-            ))
+            .child(if needs_setup {
+                sections::setup_button(state_entity.clone())
+            } else {
+                sections::translate_button(original, state_entity.clone(), busy)
+            })
     });
 
     // The Original block is ALWAYS the RTL-aware editor — no edit toggle,
@@ -640,13 +644,27 @@ pub fn translate_popup(state_entity: &Entity<DictState>, props: PopupProps) -> g
     // with the engine (see TranslatePopupView::render).
     let original_block = sections::original_text_editor(&original_editor);
     let content = match state {
-        PopupState::Idle { original } => v_flex().gap(px(8.)).child(sections::original_section(
-            original,
-            original_block,
-            &tts,
-            state_entity.clone(),
-            playback_source.clone(),
-        )),
+        PopupState::Idle { original } => {
+            let mut idle = v_flex().gap(px(8.)).child(sections::original_section(
+                original,
+                original_block,
+                &tts,
+                state_entity.clone(),
+                playback_source.clone(),
+            ));
+            if needs_setup {
+                idle = idle.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(colors::text_secondary())
+                        .child(SharedString::from(
+                            "Translation is not set up yet. Add one AI key and this popup \
+                             will translate and speak whatever you select.",
+                        )),
+                );
+            }
+            idle
+        }
 
         PopupState::Loading { original } => v_flex()
             .gap(px(8.))

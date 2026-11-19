@@ -391,6 +391,55 @@ costs one request. "Refresh models" and "Refresh TTS models" re-run the load on
 demand; a failed automatic attempt is not retried in a loop. The popup's
 Options panel shares the same cache and skips a fetch the tab already made.
 
+### Guided setup
+
+With no provider configured, the tab opens on the guided card
+(`gpui/src/components/qt_setup.rs`) instead of the raw form. It has three
+steps — choose a service, get a key, connect — and the raw form stays one
+click away ("Advanced" inside the card, and the whole tab once setup is done).
+
+The card is global by design: it never asks which country the user is in.
+`src/settings/providers.rs` describes four services (OpenRouter, AvalAI,
+GitHub Models, a local Ollama/LM Studio server) with the endpoint, the key
+page, the starting model, and whether the service can speak. Which row appears
+first is decided by `dicto_translate::reach::probe_all`, one unauthenticated
+`GET /models` per service with a short timeout, run off the UI thread. A row
+that answers is badged "reachable"; a 403/451 is "blocked on your network";
+no answer at all is "no answer". The probe does not ask for a key, and an
+authorization answer (401/402/429) still proves the network path works.
+
+The `Auto | Global | Iran` switch above the list is an override, not a
+question: `Auto` sorts by the probe result (stable, so the list does not
+shuffle while checking), while the two manual modes use a fixed order for
+when a VPN or proxy makes the probe wrong. AvalAI is a normal row, not an
+Iran-only default; OpenRouter is first in the global order and last in the
+Iran one because it answers 403 from Iranian addresses even with a valid key.
+
+"Get a key" is a numbered walkthrough per provider plus a real link to the
+provider's key page (`cx.open_url`), and it repeats the blocked warning
+before the user spends time on a key that cannot work. "Connect" shows only
+the key field; the endpoint, model, and voice stay out of sight until the
+first Test passes. Test sends one short sentence, records the `/key` credit
+answer when the provider has one, saves on success, and moves to the connected
+view: model picker, AI voice (offered on/off with its own `Free only | All`
+filter), and Advanced for the base URL.
+
+The four failure states are separated because their next actions differ:
+rejected key (401) → copy the key again; blocked network (403/451) → pick a
+reachable row or use a VPN; rate limited (429) → wait a moment; no credit
+(402) → top up. `classify` maps the provider's status code, `failure_copy`
+supplies the title and next step, and the provider's own message stays visible
+underneath so the summary never hides the evidence.
+
+A local server needs no key: `translation_ready()` accepts an empty key when
+the base URL is loopback or `.local`, and Test runs the same path. The voice
+rows say "→ system" for a provider with no speech model, which is where the
+platform TTS takes over.
+
+The setup flag (`DictState::qt_setup_done`) starts true when a key or a local
+endpoint is already stored, so existing users keep the full form. "Run setup
+again…" at the bottom of the tab restarts the card.
+
 ### Free-model defaults
 
 `src/settings/free.rs` holds the preference lists (`FREE_TEXT_MODELS`,
@@ -447,7 +496,10 @@ Both are no-ops under `NullTelemetry` when the user has not opted in. See
 | [gpui/src/tts.rs](../gpui/src/tts.rs) | AI TTS + platform espeak synthesis. |
 | [gpui/src/selection.rs](../gpui/src/selection.rs) | Primary/clipboard selection reading. |
 | [gpui/src/hotkey/](../gpui/src/hotkey/) | X11, Wayland-portal, and tray-fallback hotkey backends. |
-| [gpui/src/components/quick_translate_panel.rs](../gpui/src/quick_translate_panel.rs) | Settings tab UI. |
+| [gpui/src/components/quick_translate_panel.rs](../gpui/src/components/quick_translate_panel.rs) | Settings tab UI. |
+| [gpui/src/components/qt_setup.rs](../gpui/src/components/qt_setup.rs) | Guided setup card: steps, network-aware ordering, failure states. |
+| [src/settings/providers.rs](../src/settings/providers.rs) | Provider presets (endpoint, key page, starting model, speech). |
+| [translate/src/reach.rs](../translate/src/reach.rs) | Reachability probe + status classification. |
 | [gpui/src/state.rs](../gpui/src/state.rs) | `DictState`: holds the engine + the two playback controllers + `qt_popup_window`. |
 | [src/settings/mod.rs](../src/settings/mod.rs) | `QuickTranslateSettings` + `TtsSettings`. |
 
